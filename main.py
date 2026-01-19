@@ -303,9 +303,13 @@ def cleanup_old_data():
     EDIT_SELECT_JOB, EDIT_CHOOSE_FIELD, EDIT_NEW_VALUE, ADD_ADMIN_INPUT,
     REMOVE_ADMIN_INPUT, CUSTOM_OFFSET_INPUT, NIGHT_SCHEDULE_TIME,
     CUSTOM_MSG_BATCH, CUSTOM_MSG_TIME, CUSTOM_MSG_START, CUSTOM_MSG_END,
-    CUSTOM_MSG_TEXT, CUSTOM_MSG_LINK,
+    CUSTOM_MSG_TEXT,    # Forum Topic States
     SELECT_TOPIC, ADD_TOPIC_NAME, ADD_TOPIC_ID, REMOVE_TOPIC_INPUT
 ) = range(29)
+
+# Regex to match any menu button for canceling wizards
+MENU_REGEX = "^(📸 AI Auto-Schedule|🧠 Custom AI|🟦 Schedule CSDA|🟧 Schedule AICS|📝 Custom Message|➕ Add Subject|📂 More Options|✏️ Edit Class|🗑️ Delete Class|📅 View Schedule|📊 Attendance|📚 All Subjects|📤 Export Data|📥 Import Data|👥 Manage Admins|💬 Manage Topics|🛠️ Admin Tools|🔙 Back to Main|🌙 Night Schedule|☁️ Force Save|🔄 Reset System)$"
+
 
 # ==============================================================================
 # 🌐 4. KEEP-ALIVE SERVER (FLASK)
@@ -403,8 +407,8 @@ def get_more_keyboard():
         [KeyboardButton("✏️ Edit Class"), KeyboardButton("🗑️ Delete Class")],
         [KeyboardButton("📅 View Schedule"), KeyboardButton("📊 Attendance")],
         [KeyboardButton("📚 All Subjects"), KeyboardButton("📤 Export Data")], 
-        [KeyboardButton("📥 Import Data"), KeyboardButton("� Manage Admins")],
-        [KeyboardButton("�🛠️ Admin Tools"), KeyboardButton("🔙 Back to Main")]
+        [KeyboardButton("📥 Import Data"), KeyboardButton("👥 Manage Admins")],
+        [KeyboardButton("🛠️ Admin Tools"), KeyboardButton("🔙 Back to Main")]
     ], resize_keyboard=True, is_persistent=True)
 
 def get_admin_mgmt_keyboard():
@@ -1208,14 +1212,23 @@ async def edit_select_job(update, context):
     context.user_data['edit_job_name'] = query.data.replace("edit_", "")
     jobs = context.job_queue.get_jobs_by_name(context.user_data['edit_job_name'])
     if not jobs: return ConversationHandler.END
-    context.user_data['old_job_data'] = jobs[0].data
+    job_data = jobs[0].data
+    context.user_data['old_job_data'] = job_data
     context.user_data['old_next_t'] = jobs[0].next_t
     
     kb = [
         [InlineKeyboardButton("⏰ Change Time", callback_data="field_time")],
-        [InlineKeyboardButton("� Change Date", callback_data="field_date")],
-        [InlineKeyboardButton("�🔗 Change Link", callback_data="field_link")]
+        [InlineKeyboardButton("📅 Change Date", callback_data="field_date")],
+        [InlineKeyboardButton("🔗 Change Link", callback_data="field_link")]
     ]
+    
+    # Add Edit Message option if it's a custom message or manual alert
+    if job_data.get('manual_msg'):
+        kb.append([InlineKeyboardButton("📝 Edit Text", callback_data="field_msg")])
+        
+    # Add Edit Topic option if applicable
+    kb.append([InlineKeyboardButton("💬 Edit Topic", callback_data="field_topic")])
+    
     await query.edit_message_text(
         "🔧 <b>WHAT TO EDIT?</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -1228,58 +1241,86 @@ async def edit_select_job(update, context):
 async def edit_choose_field(update, context):
     query = update.callback_query
     await query.answer()
-    context.user_data['edit_field'] = query.data.replace("field_", "")
     
-    field_prompts = {
-        "time": ("Time", "<code>HH:MM</code> format (e.g., <code>14:30</code>)"),
-        "date": ("Date", "<code>DD-MM-YYYY</code> format (e.g., <code>25-01-2026</code>)"),
-        "link": ("Link", "the new meeting link")
+    field = query.data.replace("field_", "")
+    context.user_data['edit_field'] = field
+    
+    prompts = {
+        "time": "⏰ <b>NEW TIME:</b>\n<i>Enter in HH:MM format (24h)</i>",
+        "date": "📅 <b>NEW DATE:</b>\n<i>Enter YYYY-MM-DD</i>",
+        "link": "🔗 <b>NEW LINK:</b>\n<i>Enter the new meeting link</i>",
+        "msg": "📝 <b>NEW MESSAGE TEXT:</b>\n<i>Enter the new content (HTML supported)</i>",
+        "topic": "💬 <b>NEW TOPIC ID:</b>\n<i>Enter Topic ID (0 for General)</i>"
     }
-    field_name, hint = field_prompts.get(context.user_data['edit_field'], ("Value", ""))
     
     await query.edit_message_text(
-        f"✏️ <b>ENTER NEW {field_name.upper()}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"<i>Enter {hint}:</i>",
+        prompts.get(field, "❓ Enter new value:"),
         parse_mode=ParseMode.HTML
     )
     return EDIT_NEW_VALUE
 
 async def edit_save(update, context):
-    new_val = update.message.text.strip()
-    d = context.user_data
-    job_name = d['edit_job_name']
+    new_val = update.message.text
+    field = context.user_data['edit_field']
+    original_name = context.user_data['edit_job_name']
     
-    old_jobs = context.job_queue.get_jobs_by_name(job_name)
-    for j in old_jobs: j.schedule_removal()
-    remove_job_from_db(job_name)
+    jobs = context.job_queue.get_jobs_by_name(original_name)
+    if not jobs:
+        await update.message.reply_text("❌ <b>JOB NOT FOUND!</b>\nIt may have run already.")
+        return ConversationHandler.END
+        
+    job = jobs[0]
+    data = job.data
+    next_t = context.user_data['old_next_t']
     
-    new_data = d['old_job_data'].copy()
-    run_dt = d['old_next_t']
-    
-    if d['edit_field'] == "time":
+    # Update Data
+    if field == "time":
         try:
-            h, m = map(int, new_val.split(':'))
-            run_dt = run_dt.replace(hour=h, minute=m, second=0)
-            new_data['time_display'] = new_val
-        except: return ConversationHandler.END
-    elif d['edit_field'] == "date":
-        try:
-            new_date = datetime.strptime(new_val, "%d-%m-%Y").replace(tzinfo=IST)
-            run_dt = run_dt.replace(year=new_date.year, month=new_date.month, day=new_date.day)
-        except: 
-            await update.message.reply_text("❌ Invalid date format. Use DD-MM-YYYY")
+            h, m = map(int, new_val.split(":"))
+            next_t = next_t.replace(hour=h, minute=m)
+            data['time_display'] = new_val
+        except:
+            await update.message.reply_text("❌ <b>INVALID TIME!</b> Use HH:MM")
             return ConversationHandler.END
-    elif d['edit_field'] == "link":
-        new_data['link'] = new_val
+            
+    elif field == "date":
+        try:
+            d = datetime.strptime(new_val, "%Y-%m-%d")
+            next_t = next_t.replace(year=d.year, month=d.month, day=d.day)
+        except:
+            await update.message.reply_text("❌ <b>INVALID DATE!</b> Use YYYY-MM-DD")
+            return ConversationHandler.END
+            
+    elif field == "link":
+        data['link'] = new_val
+        
+    elif field == "msg":
+        data['manual_msg'] = new_val
+        
+    elif field == "topic":
+        try:
+            tid = int(new_val) if new_val.isdigit() and int(new_val) > 0 else None
+            data['message_thread_id'] = tid
+        except:
+            await update.message.reply_text("❌ <b>INVALID TOPIC ID!</b>")
+            return ConversationHandler.END
 
-    context.job_queue.run_once(send_alert_job, run_dt, chat_id=DB["config"]["group_id"], name=job_name, data=new_data)
-    add_job_to_db(job_name, run_dt.timestamp(), DB["config"]["group_id"], new_data)
+    # Reschedule
+    chat_id = job.chat_id
+    job.schedule_removal()
+    
+    new_job_id = f"{data['batch']}_{int(time.time())}"
+    context.job_queue.run_once(job.callback, next_t, chat_id=chat_id, name=new_job_id, data=data)
+    
+    # Update DB
+    remove_job_from_db(original_name)
+    add_job_to_db(new_job_id, next_t.timestamp(), chat_id, data)
     
     await update.message.reply_text(
-        "✅ <b>UPDATED!</b>\n"
+        "✅ <b>UPDATE SAVED!</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "<i>Class details have been modified successfully!</i> 🚀",
+        f"🔧 <i>Field:</i> <b>{field.upper()}</b>\n"
+        f"📝 <i>New Value:</i> {new_val}",
         parse_mode=ParseMode.HTML
     )
     return ConversationHandler.END
