@@ -1,12 +1,12 @@
 """
 ================================================================================
-🤖 TELEGRAM ACADEMIC BOT - TITAN EDITION (v8.0 - CLOUD NATIVE)
+🤖 TELEGRAM ACADEMIC BOT - TITAN FINAL (v11.0 - COMPLETE)
 ================================================================================
 Author: Custom AI
 Architecture: Monolithic (Supabase Integrated)
 System:
   - Python 3.10+
-  - Python-Telegram-Bot v20+
+  - Python-Telegram-Bot v21+
   - Google Gemini AI
   - Flask (Keep-Alive)
   - Supabase (PostgreSQL Persistence)
@@ -19,6 +19,8 @@ Features:
   5. 📸 AI AUTO-SCHEDULING (Gemini Vision)
   6. 🎨 HTML RICH MESSAGES
   7. 📊 ATTENDANCE TRACKING & EXPORT
+  8. 👥 MULTIPLE ADMIN SUPPORT
+  9. 📚 SHOW ALL SUBJECTS (Restored)
 ================================================================================
 """
 
@@ -77,7 +79,15 @@ load_dotenv()
 
 # Critical Environment Variables
 TOKEN = os.environ.get("BOT_TOKEN")
-ADMIN_USERNAMES = os.environ.get("ADMIN_USERNAMES", "").replace("@", "").split(",")
+
+# Robust Multi-Admin Parsing
+raw_admins = os.environ.get("ADMIN_USERNAMES", "")
+ADMIN_USERNAMES = [
+    u.strip().replace("@", "") 
+    for u in raw_admins.split(",") 
+    if u.strip()
+]
+
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 ENV_GROUP_ID = os.environ.get("GROUP_CHAT_ID")
 
@@ -134,8 +144,8 @@ else:
 # 💾 2. DATABASE & PERSISTENCE LAYER (SUPABASE VERSION)
 # ==============================================================================
 
-# Regex to identify Menu Buttons
-MENU_REGEX = "^(📸|🧠|🟦|🟧|➕|📂|✏️|🗑️|📅|📊|📤|📥|🔙)"
+# Regex to identify Menu Buttons (Updated with 📚)
+MENU_REGEX = "^(📸|🧠|🟦|🟧|➕|📂|✏️|🗑️|📅|📊|📚|📤|📥|🔙)"
 
 # Default Database Structure
 DEFAULT_DB = {
@@ -161,28 +171,23 @@ DEFAULT_DB = {
 DB = DEFAULT_DB.copy()
 
 def load_db():
-    """
-    Loads the database from Supabase 'bot_storage' table.
-    """
     global DB
     if not supabase:
         logger.warning("⚠️ Using In-Memory DB (No Supabase)")
         return
 
     try:
-        # Fetch row with ID 1
         response = supabase.table("bot_storage").select("data").eq("id", 1).execute()
         if response.data and len(response.data) > 0:
             cloud_data = response.data[0]['data']
-            # Merge logic to ensure keys exist (in case of schema updates)
             if not cloud_data:
-                logger.info("🆕 Cloud DB empty. Using defaults.")
-                save_db() # Push default
+                save_db()
             else:
                 DB = cloud_data
                 # Fix legacy issues
                 if "active_jobs" not in DB: DB["active_jobs"] = []
                 if "schedules" not in DB: DB["schedules"] = []
+                if "subjects" not in DB: DB["subjects"] = {"CSDA": [], "AICS": []}
                 logger.info("📂 Database Loaded from Supabase.")
         else:
             logger.info("🆕 No Cloud Data found. Initializing...")
@@ -191,25 +196,16 @@ def load_db():
         logger.error(f"❌ Failed to load DB from Cloud: {e}")
 
 def _save_db_thread():
-    """
-    Worker function to push DB to Supabase without blocking.
-    """
     if not supabase: return
     try:
-        # Update row with ID 1
         supabase.table("bot_storage").upsert({"id": 1, "data": DB}).execute()
-        # logger.info("☁️ Database Synced to Cloud.") 
     except Exception as e:
         logger.error(f"❌ Cloud Save Failed: {e}")
 
 def save_db():
-    """
-    Triggers a background thread to save the DB.
-    """
     t = Thread(target=_save_db_thread)
     t.start()
 
-# Initialize Database on Start
 load_db()
 
 # ------------------------------------------------------------------------------
@@ -360,8 +356,9 @@ def get_more_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("✏️ Edit Class"), KeyboardButton("🗑️ Delete Class")],
         [KeyboardButton("📅 View Schedule"), KeyboardButton("📊 Attendance")],
-        [KeyboardButton("📤 Export Data"), KeyboardButton("📥 Import Data")],
-        [KeyboardButton("🔙 Back to Main")]
+        # ADDED MISSING BUTTON HERE
+        [KeyboardButton("📚 All Subjects"), KeyboardButton("📤 Export Data")], 
+        [KeyboardButton("📥 Import Data"), KeyboardButton("🔙 Back to Main")]
     ], resize_keyboard=True, is_persistent=True)
 
 def days_keyboard(selected_days):
@@ -384,43 +381,88 @@ def days_keyboard(selected_days):
 def is_admin(username):
     if not username: return False
     if not ADMIN_USERNAMES or ADMIN_USERNAMES == ['']: return True 
-    return username in ADMIN_USERNAMES
+    return str(username) in ADMIN_USERNAMES
 
 async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     result = update.my_chat_member.new_chat_member
     chat = update.effective_chat
+    
     if result.status in [ChatMember.MEMBER, ChatMember.ADMINISTRATOR]:
         DB["config"]["group_id"] = chat.id
         DB["config"]["group_name"] = chat.title
         save_db()
-        await context.bot.send_message(chat.id, f"🤖 <b>TITAN CONNECTED</b>\nID: <code>{chat.id}</code>", parse_mode=ParseMode.HTML)
+        logger.info(f"🆕 LINKED GROUP: {chat.title} ({chat.id})")
+        
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=f"🤖 <b>TITAN SYSTEM ONLINE</b>\n"
+                 f"✅ Connected: <b>{chat.title}</b>\n"
+                 f"🕒 Timezone: IST (GMT+5:30)\n"
+                 f"🚀 <b>Ready to schedule classes.</b>",
+            parse_mode=ParseMode.HTML
+        )
 
 # ==============================================================================
 # 🏠 8. CORE HANDLERS
 # ==============================================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if update.effective_chat.type in ['group', 'supergroup']:
+    chat_type = update.effective_chat.type
+
+    if chat_type in ['group', 'supergroup']:
         if is_admin(user.username):
             DB["config"]["group_id"] = update.effective_chat.id
             DB["config"]["group_name"] = update.effective_chat.title
             save_db()
-            await update.message.reply_text("✅ <b>Group Linked!</b>", parse_mode=ParseMode.HTML)
+            try:
+                await update.message.reply_text(f"✅ <b>Titan Active!</b>\nGroup Linked: {update.effective_chat.title}", parse_mode=ParseMode.HTML)
+            except Exception as e:
+                logger.error(f"Failed to reply in group start: {e}")
         return
 
     if not is_admin(user.username): return
 
-    grp = DB["config"]["group_name"]
-    await update.message.reply_text(
-        f"<b>⚡ TITAN DASHBOARD</b>\n🔗 <b>Group:</b> {grp}\n💾 <b>DB:</b> {'Supabase' if supabase else 'Local'}",
-        parse_mode=ParseMode.HTML,
-        reply_markup=get_main_keyboard()
-    )
+    grp_name = DB["config"]["group_name"]
+    grp_id = DB["config"]["group_id"]
+    status_icon = "🟢" if grp_id else "🔴"
+
+    try:
+        await update.message.reply_text(
+            f"<b>⚡ TITAN DASHBOARD | {user.first_name}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔗 <b>Target:</b> {status_icon} <b>{grp_name}</b>\n"
+            f"🕒 <b>Bot Time:</b> {datetime.now(IST).strftime('%H:%M IST')}\n"
+            f"📅 <b>Scheduled:</b> {len(DB['active_jobs'])}\n"
+            f"💾 <b>Persistence:</b> {'Supabase' if supabase else 'Local'}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_main_keyboard()
+        )
+    except Exception as e:
+        logger.error(f"Failed to send dashboard: {e}")
 
 async def handle_navigation(update, context):
     msg = update.message.text
     if "More Options" in msg: await update.message.reply_text("📂 <b>Tools:</b>", reply_markup=get_more_keyboard(), parse_mode=ParseMode.HTML)
     elif "Back" in msg: await update.message.reply_text("⚡ <b>Main:</b>", reply_markup=get_main_keyboard(), parse_mode=ParseMode.HTML)
+
+# NEW FEATURE: VIEW ALL SUBJECTS
+async def view_all_subjects(update, context):
+    if not is_admin(update.effective_user.username): return
+    
+    subjects = DB.get("subjects", {})
+    if not subjects or (not subjects.get("CSDA") and not subjects.get("AICS")):
+        await update.message.reply_text("📭 No subjects found.")
+        return
+
+    msg = "<b>📚 REGISTERED SUBJECTS</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+    for batch, sub_list in subjects.items():
+        if sub_list:
+            msg += f"<b>{batch}:</b>\n"
+            for s in sub_list:
+                msg += f" • {s}\n"
+            msg += "\n"
+    
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
 # ==============================================================================
 # 🧙‍♂️ 9. SCHEDULING WIZARD
@@ -877,6 +919,9 @@ def main():
     app.add_handler(MessageHandler(filters.Regex("^🗑️ Delete Class"), delete_menu))
     app.add_handler(CallbackQueryHandler(handle_kill, pattern="^kill_"))
     
+    # NEW: Added View All Subjects Handler
+    app.add_handler(MessageHandler(filters.Regex("^📚 All Subjects"), view_all_subjects))
+
     app.add_handler(MessageHandler(filters.Regex("^📸 AI Auto-Schedule"), prompt_image_upload)) 
     app.add_handler(MessageHandler(filters.Regex("^📊 Attendance"), view_attendance_stats)) 
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
