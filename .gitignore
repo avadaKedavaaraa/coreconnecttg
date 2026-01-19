@@ -1,0 +1,54 @@
+# ------------------------------------------------------------------------------
+# 🔐 Security & Secrets (NEVER UPLOAD THESE)
+# ------------------------------------------------------------------------------
+.env
+.env.local
+.env.*
+
+# ------------------------------------------------------------------------------
+# 💾 Local Database & Backups
+# ------------------------------------------------------------------------------
+# Since you are moving to Supabase, ignore local JSON DBs to avoid conflicts
+titan_db.json
+titan_backup_*.json
+*.sqlite3
+*.db
+
+# ------------------------------------------------------------------------------
+# 🐍 Python & Virtual Environments
+# ------------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+env/
+.venv/
+.env/
+
+# Distribution / Packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ------------------------------------------------------------------------------
+# 📝 Logs & System Files
+# ------------------------------------------------------------------------------
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS Generated
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# ------------------------------------------------------------------------------
+# 💻 IDE Settings (Optional but recommended)
+# ------------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
