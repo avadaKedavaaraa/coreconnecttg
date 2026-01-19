@@ -679,25 +679,32 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat_type = update.effective_chat.type
 
-    if chat_type in ['group', 'supergroup']:
-        if is_admin(user.username):
-            DB["config"]["group_id"] = update.effective_chat.id
-            DB["config"]["group_name"] = update.effective_chat.title
-            save_db()
-            try:
-                await update.message.reply_text(
-                    f"🚀 <b>TITAN ACTIVATED!</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"✅ <i>Successfully linked to:</i>\n"
-                    f"📍 <b>{update.effective_chat.title}</b>\n\n"
-                    f"💡 <i>Use /start in DM for full control!</i>",
-                    parse_mode=ParseMode.HTML
-                )
-            except Exception as e:
-                logger.error(f"Failed to reply in group start: {e}")
+    # Strict Access Control
+    if not is_admin(user.username):
+        await update.message.reply_text(
+            f"⛔ <b>ACCESS DENIED</b>\n\n"
+            f"<i>You are not authorized to control The Bot. Go otherwise you will be wanded crucio</i>\n\n"
+            f"🔐 <b>Grant Access:</b> Contact @AvadaKedavaaraa",
+            parse_mode=ParseMode.HTML
+        )
         return
 
-    if not is_admin(user.username): return
+    if chat_type in ['group', 'supergroup']:
+        DB["config"]["group_id"] = update.effective_chat.id
+        DB["config"]["group_name"] = update.effective_chat.title
+        save_db()
+        try:
+            await update.message.reply_text(
+                f"🚀 <b>TITAN ACTIVATED!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"✅ <i>Successfully linked to:</i>\n"
+                f"📍 <b>{update.effective_chat.title}</b>\n\n"
+                f"💡 <i>Use /start in DM for full control!</i>",
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logger.error(f"Failed to reply in group start: {e}")
+        return
 
     grp_name = DB["config"]["group_name"]
     grp_id = DB["config"]["group_id"]
@@ -708,9 +715,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⚡ <b>TITAN COMMAND CENTER</b> ⚡\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"👋 <i>Welcome back,</i> <b>{user.first_name}!</b>\n\n"
-            f"� <b>CONNECTION STATUS</b>\n"
+            f"🔌 <b>CONNECTION STATUS</b>\n"
             f"┣ 🎯 <b>Target:</b> {status_icon} {grp_name}\n"
-            f"┣ � <b>Time:</b> {datetime.now(IST).strftime('%H:%M IST')}\n"
+            f"┣ ⏰ <b>Time:</b> {datetime.now(IST).strftime('%H:%M IST')}\n"
             f"┣ 📅 <b>Scheduled:</b> {len(DB['active_jobs'])} classes\n"
             f"┗ 💾 <b>Storage:</b> {'☁️ Supabase' if supabase else '💻 Local'}\n\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -723,6 +730,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_navigation(update, context):
     try:
+        user = update.effective_user
+        if not is_admin(user.username):
+            await update.message.reply_text(
+                "⛔ <b>ACCESS DENIED</b>\nContact @AvadaKedavaaraa",
+                parse_mode="HTML"
+            )
+            return
+
         msg = update.message.text
         if "More Options" in msg:
             await update.message.reply_text(
@@ -2226,6 +2241,14 @@ async def process_gemini_prompt(update, context):
 # 📩 14. UTILS
 # ==============================================================================
 async def feedback_handler(update, context):
+    user = update.effective_user
+    if not is_admin(user.username):
+        await update.message.reply_text(
+            f"⛔ <b>ACCESS DENIED</b>\nContact @AvadaKedavaaraa",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
     msg = update.message.text.replace("/feedback", "").strip()
     if msg:
         DB["feedback"].append(f"{datetime.now(IST)}: {msg}")
