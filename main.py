@@ -82,12 +82,14 @@ load_dotenv()
 TOKEN = os.environ.get("BOT_TOKEN")
 
 # Robust Multi-Admin Parsing
+# Robust Multi-Admin Parsing
 raw_admins = os.environ.get("ADMIN_USERNAMES", "")
 ADMIN_USERNAMES = [
-    u.strip().replace("@", "") 
+    u.strip().replace("@", "").lower() 
     for u in raw_admins.split(",") 
     if u.strip()
 ]
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 ENV_GROUP_ID = os.environ.get("GROUP_CHAT_ID")
@@ -437,17 +439,19 @@ def days_keyboard(selected_days):
 def is_admin(username):
     """Check if username is an admin (from env or database)"""
     if not username: return False
-    username = str(username)
+    username = str(username).lower()
     
-    # Check environment variable admins
+    # Check environment variable admins (already lowercased)
     if ADMIN_USERNAMES and ADMIN_USERNAMES != ['']:
         if username in ADMIN_USERNAMES:
             return True
     
     # Check database admins
-    db_admins = DB.get("admins", [])
+    db_admins = [a.lower() for a in DB.get("admins", [])]
     if username in db_admins:
         return True
+        
+    return False
         
     return False
 
@@ -476,7 +480,8 @@ async def require_private_admin(update, context):
             await update.message.reply_text(
                 f"⛔ <b>ACCESS DENIED</b>\n\n"
                 f"<i>You are not authorized to control Titan Bot.</i>\n\n"
-                f"🔐 <b>Grant Access:</b> Contact @AvadaKedavaaraa",
+                f"🔐 <b>Grant Access:</b> Contact @AvadaKedavaaraa\n"
+                f"🔑 <b>Or Login:</b> <code>/login [password]</code>",
                 parse_mode=ParseMode.HTML
             )
             return False
@@ -2494,6 +2499,41 @@ async def post_init(app):
     
     logger.info("✅ Bot initialized successfully")
 
+async def login_command(update, context):
+    """Allow users to gain admin access via password"""
+    user = update.effective_user
+    args = context.args
+    
+    if not ADMIN_PASSWORD:
+        await update.message.reply_text("❌ <b>LOGIN DISABLED</b>\nNo password configured in settings.", parse_mode=ParseMode.HTML)
+        return
+
+    if not args:
+        await update.message.reply_text("🔑 <b>ADMIN LOGIN</b>\n\nUsage: <code>/login [password]</code>", parse_mode=ParseMode.HTML)
+        return
+        
+    password = args[0]
+    if password == ADMIN_PASSWORD:
+        if "admins" not in DB: DB["admins"] = []
+        username = user.username
+        
+        # Check if already admin
+        db_admins = [a.lower() for a in DB["admins"]]
+        if username and username.lower() not in db_admins:
+            DB["admins"].append(username)
+            save_db()
+            
+        await update.message.reply_text(
+            "✅ <b>ACCESS GRANTED!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"👤 <b>Welcome, {user.first_name}!</b>\n"
+            "<i>You are now an authenticated admin.</i>\n\n"
+            "🚀 <b>TYPE /start TO BEGIN!</b>",
+            parse_mode=ParseMode.HTML
+        )
+    else:
+        await update.message.reply_text("⛔ <b>ACCESS DENIED</b>\nIncorrect password.", parse_mode=ParseMode.HTML)
+
 def main():
     keep_alive()
     request = HTTPXRequest(connection_pool_size=8, connect_timeout=60.0, read_timeout=60.0)
@@ -2501,6 +2541,7 @@ def main():
 
     # Command Handlers
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("login", login_command))  # Added login command
     app.add_handler(CommandHandler("feedback", feedback_handler))
     app.add_handler(CommandHandler("reset", reset_command))
     app.add_handler(MessageHandler(filters.Regex("^🔄 Reset System"), reset_command)) # Added button handler
