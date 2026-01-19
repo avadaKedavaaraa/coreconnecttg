@@ -598,7 +598,7 @@ async def wizard_finalize(update_obj, context):
     for dt in dates:
         run_dt = dt.replace(hour=h, minute=m, second=0)
         notify_dt = run_dt - timedelta(minutes=d['sch_offset'])
-        job_id = f"{batch}_{sub}_{dt.strftime('%d%m')}_{int(time.time())}_{count}"
+        job_id = f"{batch}_{int(time.time())}_{count}"
         job_data = {
             "batch": batch, "subject": sub, "time_display": t_str, 
             "link": d['sch_link'], "manual_msg": d.get('sch_manual_msg'),
@@ -644,7 +644,8 @@ async def start_edit(update, context):
         return ConversationHandler.END
     rows = []
     for job in jobs:
-        if job.name:
+        if job.name and isinstance(job.data, dict) and 'batch' in job.data:
+            if len(f"edit_{job.name}") > 64: continue
             d = job.data
             rows.append([InlineKeyboardButton(f"{d['batch']} {d['subject']} ({d['time_display']})", callback_data=f"edit_{job.name}")])
     await update.message.reply_text("<b>✏️ SELECT CLASS:</b>", reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
@@ -782,7 +783,7 @@ async def view_schedule_handler(update, context):
         return
     msg = "<b>🗓 UPCOMING:</b>\n"
     for job in sorted(jobs, key=lambda j: j.next_t):
-        if job.name:
+        if job.name and isinstance(job.data, dict) and 'batch' in job.data:
             d = job.data
             msg += f"• {d['batch']} {d['subject']} @ {d['time_display']}\n"
     await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
@@ -838,7 +839,7 @@ async def handle_photo(update, context):
             run = now + timedelta(days=delta)
             run = run.replace(hour=h, minute=m, second=0)
             
-            jid = f"{batch}_{sub}_{day}_{int(time.time())}_{c}"
+            jid = f"{batch}_{day}_{int(time.time())}_{c}"
             jdata = {"batch": batch, "subject": sub, "time_display": t, "link": "Check Group", "msg_type": "AI"}
             
             context.job_queue.run_once(send_alert_job, run, chat_id=gid, name=jid, data=jdata)
@@ -879,7 +880,8 @@ async def delete_menu(update, context):
     jobs = context.job_queue.jobs()
     if not jobs: return
     for j in jobs:
-        if j.name:
+        if j.name and isinstance(j.data, dict) and 'batch' in j.data:
+            if len(f"kill_{j.name}") > 64: continue
             kb = [[InlineKeyboardButton("❌ Delete", callback_data=f"kill_{j.name}")]]
             await update.message.reply_text(f"• {j.data['batch']} {j.data['subject']}", reply_markup=InlineKeyboardMarkup(kb))
 
