@@ -51,6 +51,7 @@ from telegram import (
     InlineKeyboardButton, 
     InlineKeyboardMarkup,
     BotCommand,
+    BotCommandScopeAllPrivateChats,
     ChatMember,
     ChatMemberUpdated
 )
@@ -415,7 +416,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             DB["config"]["group_name"] = update.effective_chat.title
             save_db()
             try:
-                await update.message.reply_text(f"✅ <b>Titan Active!</b>\nGroup Linked: {update.effective_chat.title}", parse_mode=ParseMode.HTML)
+                await update.message.reply_text(
+                    f"🚀 <b>TITAN ACTIVATED!</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"✅ <i>Successfully linked to:</i>\n"
+                    f"📍 <b>{update.effective_chat.title}</b>\n\n"
+                    f"💡 <i>Use /start in DM for full control!</i>",
+                    parse_mode=ParseMode.HTML
+                )
             except Exception as e:
                 logger.error(f"Failed to reply in group start: {e}")
         return
@@ -428,12 +436,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await update.message.reply_text(
-            f"<b>⚡ TITAN DASHBOARD | {user.first_name}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🔗 <b>Target:</b> {status_icon} <b>{grp_name}</b>\n"
-            f"🕒 <b>Bot Time:</b> {datetime.now(IST).strftime('%H:%M IST')}\n"
-            f"📅 <b>Scheduled:</b> {len(DB['active_jobs'])}\n"
-            f"💾 <b>Persistence:</b> {'Supabase' if supabase else 'Local'}",
+            f"⚡ <b>TITAN COMMAND CENTER</b> ⚡\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"👋 <i>Welcome back,</i> <b>{user.first_name}!</b>\n\n"
+            f"� <b>CONNECTION STATUS</b>\n"
+            f"┣ 🎯 <b>Target:</b> {status_icon} {grp_name}\n"
+            f"┣ � <b>Time:</b> {datetime.now(IST).strftime('%H:%M IST')}\n"
+            f"┣ 📅 <b>Scheduled:</b> {len(DB['active_jobs'])} classes\n"
+            f"┗ 💾 <b>Storage:</b> {'☁️ Supabase' if supabase else '💻 Local'}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"<i>Select an option below to begin!</i> 👇",
             parse_mode=ParseMode.HTML,
             reply_markup=get_main_keyboard()
         )
@@ -442,8 +454,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_navigation(update, context):
     msg = update.message.text
-    if "More Options" in msg: await update.message.reply_text("📂 <b>Tools:</b>", reply_markup=get_more_keyboard(), parse_mode=ParseMode.HTML)
-    elif "Back" in msg: await update.message.reply_text("⚡ <b>Main:</b>", reply_markup=get_main_keyboard(), parse_mode=ParseMode.HTML)
+    if "More Options" in msg:
+        await update.message.reply_text(
+            "📂 <b>ADVANCED TOOLS</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "<i>Pick a tool from below:</i> 🛠️",
+            reply_markup=get_more_keyboard(),
+            parse_mode=ParseMode.HTML
+        )
+    elif "Back" in msg:
+        await update.message.reply_text(
+            "🏠 <b>MAIN MENU</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "<i>What would you like to do?</i> ✨",
+            reply_markup=get_main_keyboard(),
+            parse_mode=ParseMode.HTML
+        )
 
 # NEW FEATURE: VIEW ALL SUBJECTS
 async def view_all_subjects(update, context):
@@ -451,15 +477,19 @@ async def view_all_subjects(update, context):
     
     subjects = DB.get("subjects", {})
     if not subjects or (not subjects.get("CSDA") and not subjects.get("AICS")):
-        await update.message.reply_text("📭 No subjects found.")
+        await update.message.reply_text(
+            "📭 <b>NO SUBJECTS FOUND!</b>\n\n"
+            "<i>Add subjects using</i> ➕ <b>Add Subject</b>",
+            parse_mode=ParseMode.HTML
+        )
         return
 
-    msg = "<b>📚 REGISTERED SUBJECTS</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+    msg = "📚 <b>REGISTERED SUBJECTS</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
     for batch, sub_list in subjects.items():
         if sub_list:
-            msg += f"<b>{batch}:</b>\n"
+            msg += f"🏷️ <b>{batch}</b>\n"
             for s in sub_list:
-                msg += f" • {s}\n"
+                msg += f"   ├ 📖 {s}\n"
             msg += "\n"
     
     await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
@@ -468,13 +498,21 @@ async def view_all_subjects(update, context):
 # 🧙‍♂️ 9. SCHEDULING WIZARD
 # ==============================================================================
 async def cancel_wizard(update, context):
-    await update.message.reply_text("🔄 Cancelled.", parse_mode=ParseMode.HTML)
+    await update.message.reply_text(
+        "❌ <b>CANCELLED</b>\n\n"
+        "<i>Operation cancelled. Back to menu!</i> 👋",
+        parse_mode=ParseMode.HTML
+    )
     return ConversationHandler.END
 
 async def init_schedule_wizard(update, context):
     if not is_admin(update.effective_user.username): return ConversationHandler.END
     if not DB["config"]["group_id"]:
-        await update.message.reply_text("❌ No Group Linked!")
+        await update.message.reply_text(
+            "⛔ <b>NO GROUP LINKED!</b>\n\n"
+            "<i>Add me to a group first, then use /start there.</i>",
+            parse_mode=ParseMode.HTML
+        )
         return ConversationHandler.END
     
     text = update.message.text
@@ -484,17 +522,34 @@ async def init_schedule_wizard(update, context):
     
     subs = DB["subjects"].get(batch, [])
     if not subs:
-        await update.message.reply_text(f"⚠️ No subjects in {batch}. Add one first.")
+        await update.message.reply_text(
+            f"⚠️ <b>NO SUBJECTS IN {batch}!</b>\n\n"
+            f"<i>Use</i> ➕ <b>Add Subject</b> <i>first.</i>",
+            parse_mode=ParseMode.HTML
+        )
         return ConversationHandler.END
     
-    rows = [[InlineKeyboardButton(s, callback_data=f"pick_{s}")] for s in subs]
-    await update.message.reply_text(f"📚 Select Subject for {batch}:", reply_markup=InlineKeyboardMarkup(rows))
+    rows = [[InlineKeyboardButton(f"📖 {s}", callback_data=f"pick_{s}")] for s in subs]
+    await update.message.reply_text(
+        f"📚 <b>SELECT SUBJECT</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🎯 <i>Batch:</i> <b>{batch}</b>\n\n"
+        f"<i>Choose a subject below:</i> 👇",
+        reply_markup=InlineKeyboardMarkup(rows),
+        parse_mode=ParseMode.HTML
+    )
     return SELECT_SUB_OR_ADD
 
 async def wizard_pick_sub(update, context):
     context.user_data['sch_sub'] = update.callback_query.data.split("_")[1]
     await update.callback_query.answer()
-    await update.callback_query.edit_message_text("📅 Select Days:", reply_markup=days_keyboard([]))
+    await update.callback_query.edit_message_text(
+        "📅 <b>SELECT DAYS</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<i>Tap to toggle days, then hit</i> <b>DONE</b> 🚀",
+        reply_markup=days_keyboard([]),
+        parse_mode=ParseMode.HTML
+    )
     return SELECT_DAYS
 
 async def wizard_toggle_days(update, context):
@@ -502,7 +557,13 @@ async def wizard_toggle_days(update, context):
     await query.answer()
     if query.data == "days_done":
         if not context.user_data.get('sch_days'): return SELECT_DAYS
-        await query.edit_message_text("📅 <b>Enter Start Date</b> (DD-MM-YYYY) or 'Today':", parse_mode=ParseMode.HTML)
+        await query.edit_message_text(
+            "� <b>START DATE</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "<i>Enter in format:</i> <code>DD-MM-YYYY</code>\n"
+            "<i>Or type:</i> <code>Today</code>",
+            parse_mode=ParseMode.HTML
+        )
         return INPUT_START_DATE
     
     day = query.data.split("_")[1]
@@ -519,10 +580,20 @@ async def wizard_start_date(update, context):
         if text == 'today': start_dt = datetime.now(IST)
         else: start_dt = datetime.strptime(text, "%d-%m-%Y").replace(tzinfo=IST)
         context.user_data['start_dt'] = start_dt
-        await update.message.reply_text("📅 <b>Enter End Date</b> (DD-MM-YYYY) or 'None':", parse_mode=ParseMode.HTML)
+        await update.message.reply_text(
+            "� <b>END DATE</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "<i>Enter in format:</i> <code>DD-MM-YYYY</code>\n"
+            "<i>Or type:</i> <code>None</code> <i>for one-time class</i>",
+            parse_mode=ParseMode.HTML
+        )
         return INPUT_END_DATE
     except:
-        await update.message.reply_text("❌ Use DD-MM-YYYY.")
+        await update.message.reply_text(
+            "❌ <b>INVALID FORMAT!</b>\n\n"
+            "<i>Please use:</i> <code>DD-MM-YYYY</code>",
+            parse_mode=ParseMode.HTML
+        )
         return INPUT_START_DATE
 
 async def wizard_end_date(update, context):
@@ -530,35 +601,77 @@ async def wizard_end_date(update, context):
     try:
         if text == 'none': context.user_data['end_dt'] = None
         else: context.user_data['end_dt'] = datetime.strptime(text, "%d-%m-%Y").replace(tzinfo=IST)
-        await update.message.reply_text("⏰ Enter Time (HH:MM):")
+        await update.message.reply_text(
+            "⏰ <b>CLASS TIME</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "<i>Enter in 24h format:</i> <code>HH:MM</code>\n"
+            "<i>Example:</i> <code>14:30</code>",
+            parse_mode=ParseMode.HTML
+        )
         return INPUT_TIME
     except:
-        await update.message.reply_text("❌ Invalid format.")
+        await update.message.reply_text(
+            "❌ <b>INVALID FORMAT!</b>\n\n"
+            "<i>Please use:</i> <code>DD-MM-YYYY</code>",
+            parse_mode=ParseMode.HTML
+        )
         return INPUT_END_DATE
 
 async def wizard_time(update, context):
     context.user_data['sch_time'] = update.message.text
-    await update.message.reply_text("🔗 Enter Link (or 'None'):")
+    await update.message.reply_text(
+        "🔗 <b>CLASS LINK</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<i>Paste the meeting link</i>\n"
+        "<i>Or type:</i> <code>None</code>",
+        parse_mode=ParseMode.HTML
+    )
     return INPUT_LINK
 
 async def wizard_link(update, context):
     context.user_data['sch_link'] = update.message.text
-    kb = [[InlineKeyboardButton("🔔 Exact Time", callback_data="offset_0")], [InlineKeyboardButton("🔔 5 Mins Before", callback_data="offset_5")]]
-    await update.message.reply_text("⏳ Notification Offset:", reply_markup=InlineKeyboardMarkup(kb))
+    kb = [
+        [InlineKeyboardButton("⏰ Exact Time", callback_data="offset_0")],
+        [InlineKeyboardButton("⏱️ 5 Mins Before", callback_data="offset_5")]
+    ]
+    await update.message.reply_text(
+        "⌛ <b>NOTIFICATION TIMING</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<i>When should I notify the group?</i> 👇",
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode=ParseMode.HTML
+    )
     return SELECT_OFFSET
 
 async def wizard_offset(update, context):
     context.user_data['sch_offset'] = int(update.callback_query.data.split("_")[1])
     await update.callback_query.answer()
-    kb = [[InlineKeyboardButton("✨ AI Auto-Write", callback_data="msg_ai")], [InlineKeyboardButton("✍️ Manual Msg", callback_data="msg_manual")]]
-    await update.callback_query.edit_message_text("📝 Message Type:", reply_markup=InlineKeyboardMarkup(kb))
+    kb = [
+        [InlineKeyboardButton("✨ AI Auto-Write", callback_data="msg_ai")],
+        [InlineKeyboardButton("✍️ Manual Message", callback_data="msg_manual")]
+    ]
+    await update.callback_query.edit_message_text(
+        "📝 <b>MESSAGE STYLE</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<i>How should I announce the class?</i> 👇",
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode=ParseMode.HTML
+    )
     return MSG_TYPE_CHOICE
 
 async def wizard_msg_choice(update, context):
     if update.callback_query.data == "msg_manual":
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text("✍️ Type your custom message:")
+        await update.callback_query.edit_message_text(
+            "✍️ <b>CUSTOM MESSAGE</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "<i>Type your announcement below:</i>",
+            parse_mode=ParseMode.HTML
+        )
         return INPUT_MANUAL_MSG
+    else:
+        context.user_data['sch_manual_msg'] = None
+        return await wizard_finalize(update.callback_query, context)
     else:
         context.user_data['sch_manual_msg'] = None
         return await wizard_finalize(update.callback_query, context)
@@ -608,7 +721,15 @@ async def wizard_finalize(update_obj, context):
         add_job_to_db(job_id, notify_dt.timestamp(), gid, job_data)
         count += 1
     
-    msg = f"✅ <b>SCHEDULED {count} CLASSES</b>"
+    msg = (
+        f"🎉 <b>SUCCESS!</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"✅ <b>{count} class(es) scheduled!</b>\n\n"
+        f"📌 <i>Subject:</i> <b>{sub}</b>\n"
+        f"🎯 <i>Batch:</i> <b>{batch}</b>\n"
+        f"⏰ <i>Time:</i> <b>{t_str}</b>\n\n"
+        f"<i>Notifications will be sent automatically!</i> 🚀"
+    )
     if isinstance(update_obj, Update): await update_obj.message.reply_text(msg, parse_mode=ParseMode.HTML)
     else: await update_obj.message.reply_text(msg, parse_mode=ParseMode.HTML)
     return ConversationHandler.END
@@ -618,13 +739,28 @@ async def wizard_finalize(update_obj, context):
 # ==============================================================================
 async def start_add_sub(update, context):
     if not is_admin(update.effective_user.username): return ConversationHandler.END
-    await update.message.reply_text("Select Batch:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("CSDA", callback_data="sub_CSDA"), InlineKeyboardButton("AICS", callback_data="sub_AICS")]]))
+    kb = [
+        [InlineKeyboardButton("🟦 CSDA", callback_data="sub_CSDA"), 
+         InlineKeyboardButton("🟧 AICS", callback_data="sub_AICS")]
+    ]
+    await update.message.reply_text(
+        "➕ <b>ADD NEW SUBJECT</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<i>Select the batch:</i> 👇",
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode=ParseMode.HTML
+    )
     return SELECT_BATCH
 
 async def save_batch_for_sub(update, context):
     context.user_data['temp_batch'] = update.callback_query.data.split("_")[1]
     await update.callback_query.answer()
-    await update.callback_query.edit_message_text("✍️ Enter Subject Name:")
+    await update.callback_query.edit_message_text(
+        "📝 <b>SUBJECT NAME</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<i>Type the subject name below:</i>",
+        parse_mode=ParseMode.HTML
+    )
     return NEW_SUBJECT_INPUT
 
 async def save_new_sub(update, context):
@@ -633,22 +769,39 @@ async def save_new_sub(update, context):
     if s not in DB["subjects"][b]:
         DB["subjects"][b].append(s)
         save_db()
-    await update.message.reply_text(f"✅ Added <b>{s}</b>", parse_mode=ParseMode.HTML)
+    await update.message.reply_text(
+        f"✅ <b>SUBJECT ADDED!</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📖 <b>{s}</b>\n"
+        f"🎯 <i>Batch:</i> <b>{b}</b>\n\n"
+        f"<i>You can now schedule classes for this subject!</i> 🚀",
+        parse_mode=ParseMode.HTML
+    )
     return ConversationHandler.END
 
 async def start_edit(update, context):
     if not is_admin(update.effective_user.username): return ConversationHandler.END
     jobs = context.job_queue.jobs()
     if not jobs:
-        await update.message.reply_text("⚠️ No classes to edit.")
+        await update.message.reply_text(
+            "📭 <b>NO CLASSES FOUND!</b>\n\n"
+            "<i>Schedule some classes first.</i>",
+            parse_mode=ParseMode.HTML
+        )
         return ConversationHandler.END
     rows = []
     for job in jobs:
         if job.name and isinstance(job.data, dict) and 'batch' in job.data:
             if len(f"edit_{job.name}") > 64: continue
             d = job.data
-            rows.append([InlineKeyboardButton(f"{d['batch']} {d['subject']} ({d['time_display']})", callback_data=f"edit_{job.name}")])
-    await update.message.reply_text("<b>✏️ SELECT CLASS:</b>", reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
+            rows.append([InlineKeyboardButton(f"📖 {d['batch']} {d['subject']} ({d['time_display']})", callback_data=f"edit_{job.name}")])
+    await update.message.reply_text(
+        "✏️ <b>EDIT CLASS</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<i>Select a class to modify:</i> 👇",
+        reply_markup=InlineKeyboardMarkup(rows),
+        parse_mode=ParseMode.HTML
+    )
     return EDIT_SELECT_JOB
 
 async def edit_select_job(update, context):
@@ -660,15 +813,31 @@ async def edit_select_job(update, context):
     context.user_data['old_job_data'] = jobs[0].data
     context.user_data['old_next_t'] = jobs[0].next_t
     
-    kb = [[InlineKeyboardButton("⏰ Time", callback_data="field_time"), InlineKeyboardButton("🔗 Link", callback_data="field_link")]]
-    await query.edit_message_text("❓ <b>Edit what?</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+    kb = [
+        [InlineKeyboardButton("⏰ Change Time", callback_data="field_time")],
+        [InlineKeyboardButton("🔗 Change Link", callback_data="field_link")]
+    ]
+    await query.edit_message_text(
+        "🔧 <b>WHAT TO EDIT?</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<i>Select what you want to change:</i> 👇",
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode=ParseMode.HTML
+    )
     return EDIT_CHOOSE_FIELD
 
 async def edit_choose_field(update, context):
     query = update.callback_query
     await query.answer()
     context.user_data['edit_field'] = query.data.replace("field_", "")
-    await query.edit_message_text(f"✍️ Enter New Value:")
+    field_name = "Time (HH:MM)" if context.user_data['edit_field'] == "time" else "Meeting Link"
+    await query.edit_message_text(
+        f"✏️ <b>ENTER NEW VALUE</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"<i>Field:</i> <b>{field_name}</b>\n\n"
+        f"<i>Type the new value below:</i>",
+        parse_mode=ParseMode.HTML
+    )
     return EDIT_NEW_VALUE
 
 async def edit_save(update, context):
@@ -695,7 +864,12 @@ async def edit_save(update, context):
     context.job_queue.run_once(send_alert_job, run_dt, chat_id=DB["config"]["group_id"], name=job_name, data=new_data)
     add_job_to_db(job_name, run_dt.timestamp(), DB["config"]["group_id"], new_data)
     
-    await update.message.reply_text("✅ <b>Updated!</b>", parse_mode=ParseMode.HTML)
+    await update.message.reply_text(
+        "✅ <b>UPDATED!</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<i>Class details have been modified successfully!</i> 🚀",
+        parse_mode=ParseMode.HTML
+    )
     return ConversationHandler.END
 
 # ==============================================================================
@@ -744,11 +918,27 @@ async def export_data(update, context):
     if not is_admin(update.effective_user.username): return
     f = io.BytesIO(json.dumps(DB, indent=4).encode())
     f.name = f"titan_backup_{int(time.time())}.json"
-    await context.bot.send_document(update.effective_chat.id, document=f, caption="✅ Cloud Backup Export")
+    await context.bot.send_document(
+        update.effective_chat.id,
+        document=f,
+        caption=(
+            "📦 <b>BACKUP EXPORTED!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "✅ <i>Your cloud data has been exported.</i>\n"
+            "💾 <i>Keep this file safe!</i>"
+        ),
+        parse_mode=ParseMode.HTML
+    )
 
 async def import_request(update, context):
     if not is_admin(update.effective_user.username): return
-    await update.message.reply_text("📥 <b>Upload .json to overwrite Cloud DB.</b>", parse_mode=ParseMode.HTML)
+    await update.message.reply_text(
+        "📥 <b>IMPORT DATA</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "⚠️ <b>WARNING:</b> <i>This will OVERWRITE all current data!</i>\n\n"
+        "<i>Upload your</i> <code>.json</code> <i>backup file below:</i>",
+        parse_mode=ParseMode.HTML
+    )
     context.user_data['wait_import'] = True
 
 async def handle_import_file(update, context):
@@ -757,8 +947,14 @@ async def handle_import_file(update, context):
     raw = await file.download_as_bytearray()
     global DB
     DB = json.loads(raw.decode())
-    save_db() # Sync to cloud
-    await update.message.reply_text("✅ Cloud DB Updated. Restart bot.")
+    save_db()
+    await update.message.reply_text(
+        "✅ <b>IMPORT SUCCESSFUL!</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<i>Cloud database has been updated.</i>\n\n"
+        "⚠️ <b>Note:</b> <i>Restart the bot to apply all changes.</i>",
+        parse_mode=ParseMode.HTML
+    )
     context.user_data['wait_import'] = False
 
 async def mark_attendance(update, context):
@@ -779,44 +975,85 @@ async def mark_attendance(update, context):
 async def view_schedule_handler(update, context):
     jobs = context.job_queue.jobs()
     if not jobs:
-        await update.message.reply_text("📭 No classes.")
+        await update.message.reply_text(
+            "📭 <b>NO UPCOMING CLASSES!</b>\n\n"
+            "<i>Schedule some classes first.</i>",
+            parse_mode=ParseMode.HTML
+        )
         return
-    msg = "<b>🗓 UPCOMING:</b>\n"
+    msg = (
+        "📅 <b>UPCOMING CLASSES</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    )
     for job in sorted(jobs, key=lambda j: j.next_t):
         if job.name and isinstance(job.data, dict) and 'batch' in job.data:
             d = job.data
-            msg += f"• {d['batch']} {d['subject']} @ {d['time_display']}\n"
+            msg += f"📖 <b>{d['batch']}</b> • {d['subject']}\n"
+            msg += f"     ⏰ <i>{d['time_display']}</i>\n\n"
     await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
 async def prompt_image_upload(update, context):
     if not is_admin(update.effective_user.username): return
-    await update.message.reply_text("📸 <b>Upload Timetable Image</b>", parse_mode=ParseMode.HTML)
+    await update.message.reply_text(
+        "📸 <b>AI TIMETABLE SCANNER</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "🧠 <i>Send me a photo of your timetable</i>\n"
+        "🤖 <i>I'll automatically schedule all classes!</i>\n\n"
+        "✨ <b>Tip:</b> <i>Clearer images = better results!</i>",
+        parse_mode=ParseMode.HTML
+    )
 
 async def view_attendance_stats(update, context):
     if not is_admin(update.effective_user.username): return
-    msg = "<b>📊 RECENT ATTENDANCE:</b>\n"
     keys = list(DB["attendance"].keys())[-10:]
+    if not keys:
+        await update.message.reply_text(
+            "📊 <b>NO ATTENDANCE DATA!</b>\n\n"
+            "<i>No classes have been held yet.</i>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
+    msg = (
+        "📊 <b>ATTENDANCE REPORT</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<i>Last 10 classes:</i>\n\n"
+    )
     for k in keys:
         try:
             parts = k.split('_')
-            msg += f"{parts[0]} {parts[1]} ({parts[2]}): {len(DB['attendance'][k])} present\n"
+            count = len(DB['attendance'][k])
+            msg += f"📖 <b>{parts[0]}</b>\n"
+            msg += f"     👥 <i>{count} students attended</i>\n\n"
         except: continue
     await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
 async def handle_photo(update, context):
     if not is_admin(update.effective_user.username): return
     if not DB["config"]["group_id"]:
-        await update.message.reply_text("❌ Connect group first.")
+        await update.message.reply_text(
+            "⛔ <b>NO GROUP LINKED!</b>\n\n"
+            "<i>Add me to a group first!</i>",
+            parse_mode=ParseMode.HTML
+        )
         return
 
-    msg = await update.message.reply_text("📸 <b>AI Analyzing...</b>", parse_mode=ParseMode.HTML)
+    msg = await update.message.reply_text(
+        "🧠 <b>AI ANALYZING...</b>\n\n"
+        "⏳ <i>Please wait while I scan your timetable...</i>",
+        parse_mode=ParseMode.HTML
+    )
     try:
         f = await update.message.photo[-1].get_file()
         b = await f.download_as_bytearray()
         sch = await analyze_timetable_image(b)
         
         if not sch:
-            await msg.edit_text("❌ AI Vision failed.")
+            await msg.edit_text(
+                "❌ <b>AI VISION FAILED!</b>\n\n"
+                "<i>Could not read the timetable. Try a clearer image.</i>",
+                parse_mode=ParseMode.HTML
+            )
             return
 
         c = 0
@@ -847,20 +1084,40 @@ async def handle_photo(update, context):
             c += 1
         
         save_db()
-        await msg.edit_text(f"✅ <b>Scheduled {c} Classes.</b>", parse_mode=ParseMode.HTML)
+        await msg.edit_text(
+            f"🎉 <b>AI SCAN COMPLETE!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"✅ <b>{c} classes scheduled!</b>\n\n"
+            f"<i>Check</i> 📅 <b>View Schedule</b> <i>to see them!</i> 🚀",
+            parse_mode=ParseMode.HTML
+        )
     except Exception as e:
-        await msg.edit_text(f"❌ Error: {e}")
+        await msg.edit_text(
+            f"❌ <b>ERROR!</b>\n\n"
+            f"<code>{e}</code>",
+            parse_mode=ParseMode.HTML
+        )
 
 # ==============================================================================
 # 🧠 13. CUSTOM AI
 # ==============================================================================
 async def start_gemini_tool(update, context):
     if not is_admin(update.effective_user.username): return ConversationHandler.END
-    await update.message.reply_text("🧠 <b>Prompt me:</b>", parse_mode=ParseMode.HTML)
+    await update.message.reply_text(
+        "🧠 <b>AI ASSISTANT</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "💬 <i>What would you like me to do?</i>\n\n"
+        "<i>Type your prompt below:</i> 👇",
+        parse_mode=ParseMode.HTML
+    )
     return GEMINI_PROMPT_INPUT
 
 async def process_gemini_prompt(update, context):
-    msg = await update.message.reply_text("🤔 Thinking...")
+    msg = await update.message.reply_text(
+        "� <b>THINKING...</b>\n\n"
+        "⏳ <i>Processing your request...</i>",
+        parse_mode=ParseMode.HTML
+    )
     response = await custom_gemini_task(update.message.text)
     await msg.edit_text(response[:4000], parse_mode=ParseMode.HTML)
     return ConversationHandler.END
@@ -873,44 +1130,225 @@ async def feedback_handler(update, context):
     if msg:
         DB["feedback"].append(f"{datetime.now(IST)}: {msg}")
         save_db()
-        await update.message.reply_text("✅ Feedback sent.")
+        await update.message.reply_text(
+            "✅ <b>FEEDBACK RECEIVED!</b>\n\n"
+            "<i>Thank you for your feedback. We'll review it soon!</i> 🙏",
+            parse_mode=ParseMode.HTML
+        )
+    else:
+        await update.message.reply_text(
+            "📝 <b>SEND FEEDBACK</b>\n\n"
+            "<i>Usage:</i> <code>/feedback Your message here</code>",
+            parse_mode=ParseMode.HTML
+        )
 
 async def delete_menu(update, context):
     if not is_admin(update.effective_user.username): return
     jobs = context.job_queue.jobs()
-    if not jobs: return
-    for j in jobs:
-        if j.name and isinstance(j.data, dict) and 'batch' in j.data:
-            if len(f"kill_{j.name}") > 64: continue
-            kb = [[InlineKeyboardButton("❌ Delete", callback_data=f"kill_{j.name}")]]
-            await update.message.reply_text(f"• {j.data['batch']} {j.data['subject']}", reply_markup=InlineKeyboardMarkup(kb))
+    valid_jobs = [j for j in jobs if j.name and isinstance(j.data, dict) and 'batch' in j.data and len(f"kill_{j.name}") <= 64]
+    
+    if not valid_jobs:
+        await update.message.reply_text(
+            "📭 <b>NO CLASSES TO DELETE!</b>\n\n"
+            "<i>Schedule some classes first.</i>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
+    await update.message.reply_text(
+        "🗑️ <b>DELETE CLASSES</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<i>Tap</i> ❌ <i>to remove a class:</i>\n",
+        parse_mode=ParseMode.HTML
+    )
+    
+    for j in valid_jobs:
+        kb = [[InlineKeyboardButton("❌ Delete This", callback_data=f"kill_{j.name}")]]
+        await update.message.reply_text(
+            f"📖 <b>{j.data['batch']}</b> • {j.data['subject']}\n"
+            f"     ⏰ <i>{j.data['time_display']}</i>",
+            reply_markup=InlineKeyboardMarkup(kb),
+            parse_mode=ParseMode.HTML
+        )
 
 async def handle_kill(update, context):
     qid = update.callback_query.data.replace("kill_", "")
     jobs = context.job_queue.get_jobs_by_name(qid)
     for j in jobs: j.schedule_removal()
     remove_job_from_db(qid)
-    await update.callback_query.edit_message_text("❌ <b>Deleted</b>", parse_mode=ParseMode.HTML)
+    await update.callback_query.edit_message_text(
+        "✅ <b>CLASS DELETED!</b>\n\n"
+        "<i>This class has been removed from the schedule.</i>",
+        parse_mode=ParseMode.HTML
+    )
 
 async def handle_expired(update, context):
     await update.callback_query.answer("⚠️ Expired.", show_alert=True)
 
 # ==============================================================================
+# � RESET / REVOKE COMMAND
+# ==============================================================================
+async def reset_command(update, context):
+    """Manual reset command for admins to fix issues"""
+    if not is_admin(update.effective_user.username):
+        await update.message.reply_text("⛔ <i>Admin only command.</i>", parse_mode=ParseMode.HTML)
+        return
+    
+    # Clear all scheduled jobs from memory
+    jobs = context.job_queue.jobs()
+    cleared = 0
+    for job in jobs:
+        if job.name and isinstance(job.data, dict):
+            job.schedule_removal()
+            cleared += 1
+    
+    # Clear jobs from database
+    DB["active_jobs"] = []
+    save_db()
+    
+    await update.message.reply_text(
+        "🔄 <b>SYSTEM RESET COMPLETE!</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"✅ Cleared <b>{cleared}</b> scheduled jobs\n"
+        f"✅ Database synced\n\n"
+        "<i>If you're still seeing issues:</i>\n"
+        "┣ 1️⃣ Go to @BotFather\n"
+        "┣ 2️⃣ Send /revoke\n"
+        "┣ 3️⃣ Get new token\n"
+        "┗ 4️⃣ Update on Render",
+        parse_mode=ParseMode.HTML
+    )
+
+# ==============================================================================
+# 🛠️ ADMIN COMMAND SHORTCUTS
+# ==============================================================================
+async def admin_command(update, context):
+    """Show admin tools keyboard"""
+    if not is_admin(update.effective_user.username):
+        await update.message.reply_text("⛔ <i>Admin only command.</i>", parse_mode=ParseMode.HTML)
+        return
+    await update.message.reply_text(
+        "🛠️ <b>ADMIN TOOLS</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<i>Select an option from the keyboard below:</i> 👇",
+        reply_markup=get_main_keyboard(),
+        parse_mode=ParseMode.HTML
+    )
+
+async def schedule_command(update, context):
+    """Quick access to view schedule"""
+    if not is_admin(update.effective_user.username):
+        await update.message.reply_text("⛔ <i>Admin only command.</i>", parse_mode=ParseMode.HTML)
+        return
+    await view_schedule_handler(update, context)
+
+async def export_command(update, context):
+    """Quick access to export data"""
+    if not is_admin(update.effective_user.username):
+        await update.message.reply_text("⛔ <i>Admin only command.</i>", parse_mode=ParseMode.HTML)
+        return
+    await export_data(update, context)
+
+async def subjects_command(update, context):
+    """Quick access to view subjects"""
+    if not is_admin(update.effective_user.username):
+        await update.message.reply_text("⛔ <i>Admin only command.</i>", parse_mode=ParseMode.HTML)
+        return
+    await view_all_subjects(update, context)
+
+async def attendance_command(update, context):
+    """Quick access to attendance stats"""
+    if not is_admin(update.effective_user.username):
+        await update.message.reply_text("⛔ <i>Admin only command.</i>", parse_mode=ParseMode.HTML)
+        return
+    await view_attendance_stats(update, context)
+
+# ==============================================================================
+# ⚠️ GLOBAL ERROR HANDLER
+# ==============================================================================
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Log errors and notify admins"""
+    logger.error(f"Exception: {context.error}")
+    
+    # Try to notify the user if possible
+    if update and hasattr(update, 'effective_message') and update.effective_message:
+        error_msg = str(context.error)
+        
+        # Check for specific known errors
+        if "Conflict" in error_msg:
+            await update.effective_message.reply_text(
+                "⚠️ <b>BOT CONFLICT DETECTED!</b>\n\n"
+                "<i>Multiple bot instances are running.</i>\n\n"
+                "🔧 <b>Quick Fix:</b> Use /reset\n"
+                "🛡️ <b>Permanent Fix:</b> Revoke token via @BotFather",
+                parse_mode=ParseMode.HTML
+            )
+        elif "Button_data_invalid" in error_msg:
+            await update.effective_message.reply_text(
+                "⚠️ <b>BUTTON ERROR!</b>\n\n"
+                "<i>Some buttons have expired data.</i>\n\n"
+                "🔧 <b>Fix:</b> Use /reset to clear old jobs",
+                parse_mode=ParseMode.HTML
+            )
+        else:
+            await update.effective_message.reply_text(
+                f"❌ <b>AN ERROR OCCURRED</b>\n\n"
+                f"<code>{error_msg[:200]}</code>\n\n"
+                f"<i>Try /reset if issues persist.</i>",
+                parse_mode=ParseMode.HTML
+            )
+
+# ==============================================================================
 # 🚀 16. MAIN
 # ==============================================================================
 async def post_init(app):
-    await app.bot.set_my_commands([BotCommand("start", "Panel"), BotCommand("feedback", "Contact Admin")])
+    # Public commands visible to everyone
+    public_commands = [
+        BotCommand("start", "🏠 Open Dashboard"),
+        BotCommand("feedback", "💬 Send Feedback"),
+    ]
+    
+    # Admin commands - all commands including admin tools
+    admin_commands = [
+        BotCommand("start", "🏠 Open Dashboard"),
+        BotCommand("admin", "🛠️ Admin Tools"),
+        BotCommand("schedule", "📅 View Schedule"),
+        BotCommand("subjects", "📚 All Subjects"),
+        BotCommand("attendance", "📊 Attendance Report"),
+        BotCommand("export", "📤 Export Data"),
+        BotCommand("reset", "🔄 Reset & Fix Issues"),
+        BotCommand("feedback", "💬 Send Feedback"),
+    ]
+    
+    # Set default commands for all users
+    await app.bot.set_my_commands(public_commands)
+    
+    # Set admin commands for private chats (where admins will use them)
+    await app.bot.set_my_commands(
+        admin_commands,
+        scope=BotCommandScopeAllPrivateChats()
+    )
+    
+    # Restore scheduled jobs from database
     await restore_jobs(app)
     cleanup_old_data()
+    
+    logger.info("✅ Bot initialized successfully")
 
 def main():
     keep_alive()
     request = HTTPXRequest(connection_pool_size=8, connect_timeout=60.0, read_timeout=60.0)
     app = Application.builder().token(TOKEN).request(request).defaults(Defaults(tzinfo=IST)).post_init(post_init).build()
 
-    # Handlers
+    # Command Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("feedback", feedback_handler))
+    app.add_handler(CommandHandler("reset", reset_command))
+    app.add_handler(CommandHandler("admin", admin_command))
+    app.add_handler(CommandHandler("schedule", schedule_command))
+    app.add_handler(CommandHandler("export", export_command))
+    app.add_handler(CommandHandler("subjects", subjects_command))
+    app.add_handler(CommandHandler("attendance", attendance_command))
     app.add_handler(ChatMemberHandler(track_chats, ChatMemberHandler.MY_CHAT_MEMBER))
     
     app.add_handler(MessageHandler(filters.Regex("^📂 More Options"), handle_navigation))
@@ -978,9 +1416,13 @@ def main():
     ))
 
     app.add_handler(CallbackQueryHandler(handle_expired))
+    
+    # Global error handler
+    app.add_error_handler(error_handler)
 
     print("✅ TITAN CLOUD BOT ONLINE")
-    app.run_polling()
+    # drop_pending_updates=True prevents conflict with previous instances
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
