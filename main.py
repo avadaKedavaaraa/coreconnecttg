@@ -672,9 +672,6 @@ async def wizard_msg_choice(update, context):
     else:
         context.user_data['sch_manual_msg'] = None
         return await wizard_finalize(update.callback_query, context)
-    else:
-        context.user_data['sch_manual_msg'] = None
-        return await wizard_finalize(update.callback_query, context)
 
 async def wizard_manual_msg(update, context):
     context.user_data['sch_manual_msg'] = update.message.text
