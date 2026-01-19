@@ -303,7 +303,7 @@ def cleanup_old_data():
     EDIT_SELECT_JOB, EDIT_CHOOSE_FIELD, EDIT_NEW_VALUE, ADD_ADMIN_INPUT,
     REMOVE_ADMIN_INPUT, CUSTOM_OFFSET_INPUT, NIGHT_SCHEDULE_TIME,
     CUSTOM_MSG_BATCH, CUSTOM_MSG_TIME, CUSTOM_MSG_START, CUSTOM_MSG_END,
-    CUSTOM_MSG_TEXT,    # Forum Topic States
+    CUSTOM_MSG_TEXT, CUSTOM_MSG_LINK,
     SELECT_TOPIC, ADD_TOPIC_NAME, ADD_TOPIC_ID, REMOVE_TOPIC_INPUT
 ) = range(29)
 
@@ -443,19 +443,21 @@ def is_admin(username):
     if ADMIN_USERNAMES and ADMIN_USERNAMES != ['']:
         if username in ADMIN_USERNAMES:
             return True
-    elif not ADMIN_USERNAMES or ADMIN_USERNAMES == ['']:
-        # If no env admins, first user becomes admin
-        return True
     
     # Check database admins
     db_admins = DB.get("admins", [])
-    return username in db_admins
+    if username in db_admins:
+        return True
+        
+    return False
 
 def is_super_admin(username):
     """Check if username is the primary admin (from env)"""
     if not username: return False
-    if not ADMIN_USERNAMES or ADMIN_USERNAMES == ['']: return True
-    return str(username) in ADMIN_USERNAMES
+    # Strict: explicit list required
+    if ADMIN_USERNAMES and username in ADMIN_USERNAMES:
+        return True
+    return False
 
 def is_private_chat(update):
     """Check if the message is from a private chat"""
@@ -471,7 +473,12 @@ async def require_private_admin(update, context):
         
         # Check if admin
         if not is_admin(user.username):
-            await update.message.reply_text("⛔ <i>Admin only command.</i>", parse_mode=ParseMode.HTML)
+            await update.message.reply_text(
+                f"⛔ <b>ACCESS DENIED</b>\n\n"
+                f"<i>You are not authorized to control Titan Bot.</i>\n\n"
+                f"🔐 <b>Grant Access:</b> Contact @AvadaKedavaaraa",
+                parse_mode=ParseMode.HTML
+            )
             return False
         
         # Check if private chat
