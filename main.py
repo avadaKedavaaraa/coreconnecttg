@@ -199,14 +199,53 @@ def load_db():
 
 def _save_db_thread():
     if not supabase: return
-    try:
-        supabase.table("bot_storage").upsert({"id": 1, "data": DB}).execute()
-    except Exception as e:
-        logger.error(f"❌ Cloud Save Failed: {e}")
+    # Delays in seconds: 1m, 1m, 1m, 5m, 10m
+    delays = [60, 60, 60, 300, 600]
+    
+    for i, delay in enumerate(delays):
+        try:
+            supabase.table("bot_storage").upsert({"id": 1, "data": DB}).execute()
+            logger.info("✅ Database saved to Cloud.")
+            return
+        except Exception as e:
+            logger.error(f"❌ Cloud Save Failed (Attempt {i+1}/{len(delays)}): {e}")
+            logger.info(f"⏳ Retrying in {delay/60} minutes...")
+            time.sleep(delay)
+    
+    # Final attempt or failure
+    logger.error("❌ CLOUD SAVE FAILED after multiple attempts.")
 
 def save_db():
     t = Thread(target=_save_db_thread)
     t.start()
+
+async def force_cloud_save(update, context):
+    """Manually trigger cloud save with UI feedback"""
+    if not await require_private_admin(update, context): return
+    
+    msg = await update.message.reply_text(
+        "☁️ <b>SAVING TO CLOUD...</b>\n"
+        "⏳ <i>Please wait...</i>",
+        parse_mode=ParseMode.HTML
+    )
+    
+    try:
+        # Run sync save in thread but wait for it
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _save_db_thread)
+        
+        await msg.edit_text(
+            "✅ <b>CLOUD SAVE SUCCESSFUL!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "💾 <i>Data has been synced to Supabase.</i>",
+            parse_mode=ParseMode.HTML
+        )
+    except Exception as e:
+        await msg.edit_text(
+            f"❌ <b>SAVE FAILED!</b>\n\n"
+            f"<i>Error:</i> {str(e)}",
+            parse_mode=ParseMode.HTML
+        )
 
 load_db()
 
@@ -1704,6 +1743,25 @@ async def auto_register_topic(update, context):
     except Exception as e:
         logger.error(f"Error in auto_register_topic: {e}")
 
+async def admin_command(update, context):
+    """Show admin tools keyboard"""
+    if not await require_private_admin(update, context): return
+    
+    kb = [
+        [KeyboardButton("➕ Add Subject"), KeyboardButton("🗑️ Delete Class")],
+        [KeyboardButton("📤 Export Data"), KeyboardButton("📥 Import Data")],
+        [KeyboardButton("👥 Manage Admins"), KeyboardButton("💬 Manage Topics")],
+        [KeyboardButton("🌙 Night Schedule"), KeyboardButton("☁️ Force Save")],
+        [KeyboardButton("🔄 Reset System"), KeyboardButton("🔙 Back to Main")]
+    ]
+    await update.message.reply_text(
+        "🛠️ <b>ADMIN TOOLS</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<i>Select an action:</i> 👇",
+        reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True),
+        parse_mode=ParseMode.HTML
+    )
+
 async def manage_topics_handler(update, context):
     """Show Manage Topics Menu"""
     if not await require_private_admin(update, context): return
@@ -2374,6 +2432,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("feedback", feedback_handler))
     app.add_handler(CommandHandler("reset", reset_command))
+    app.add_handler(MessageHandler(filters.Regex("^🔄 Reset System"), reset_command)) # Added button handler
     app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(CommandHandler("schedule", schedule_command))
     app.add_handler(CommandHandler("export", export_command))
@@ -2394,6 +2453,7 @@ def main():
     # NEW: Added View All Subjects Handler
     app.add_handler(MessageHandler(filters.Regex("^📚 All Subjects"), view_all_subjects))
     app.add_handler(MessageHandler(filters.Regex("^🛠️ Admin Tools"), admin_command))
+    app.add_handler(MessageHandler(filters.Regex("^☁️ Force Save"), force_cloud_save))
 
     app.add_handler(MessageHandler(filters.Regex("^📸 AI Auto-Schedule"), prompt_image_upload)) 
     app.add_handler(MessageHandler(filters.Regex("^📊 Attendance"), view_attendance_stats)) 
