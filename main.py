@@ -2789,17 +2789,42 @@ async def send_night_summary(context: ContextTypes.DEFAULT_TYPE):
 # 📊 12. EXTRAS
 # ==============================================================================
 async def export_data(update, context):
+    """Export complete database backup"""
     if not await require_private_admin(update, context): return
-    f = io.BytesIO(json.dumps(DB, indent=4).encode())
-    f.name = f"titan_backup_{int(time.time())}.json"
+    
+    # Ensure all keys exist in export
+    export_db = {
+        "config": DB.get("config", {"group_id": None, "group_name": "❌ No Group Linked"}),
+        "subjects": DB.get("subjects", {"CSDA": [], "AICS": []}),
+        "active_jobs": DB.get("active_jobs", []),
+        "attendance": DB.get("attendance", {}),
+        "feedback": DB.get("feedback", []),
+        "system_stats": DB.get("system_stats", {}),
+        "schedules": DB.get("schedules", []),
+        "admins": DB.get("admins", []),
+        "topics": DB.get("topics", {})
+    }
+    
+    f = io.BytesIO(json.dumps(export_db, indent=2).encode())
+    f.name = f"vasuki_backup_{datetime.now(IST).strftime('%Y%m%d_%H%M')}.json"
+    
+    # Count stats
+    total_subjects = sum(len(s) for s in export_db['subjects'].values())
+    
     await context.bot.send_document(
         update.effective_chat.id,
         document=f,
         caption=(
             "📦 <b>BACKUP EXPORTED!</b>\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "✅ <i>Your cloud data has been exported.</i>\n"
-            "💾 <i>Keep this file safe!</i>"
+            "<b>Contents:</b>\n"
+            f"┣ 📚 Subjects: {total_subjects}\n"
+            f"┣ 📅 Scheduled Jobs: {len(export_db['active_jobs'])}\n"
+            f"┣ 💬 Topics: {len(export_db['topics'])}\n"
+            f"┣ 👥 Admins: {len(export_db['admins'])}\n"
+            f"┣ 📊 Attendance Records: {len(export_db['attendance'])}\n"
+            f"┗ 💬 Feedback: {len(export_db['feedback'])}\n\n"
+            "💾 <i>Import this file to restore all data!</i>"
         ),
         parse_mode=ParseMode.HTML
     )
@@ -2816,20 +2841,84 @@ async def import_request(update, context):
     context.user_data['wait_import'] = True
 
 async def handle_import_file(update, context):
+    """Import database and restore scheduled jobs"""
     if not context.user_data.get('wait_import'): return
-    file = await update.message.document.get_file()
-    raw = await file.download_as_bytearray()
-    global DB
-    DB = json.loads(raw.decode())
-    save_db()
-    await update.message.reply_text(
-        "✅ <b>IMPORT SUCCESSFUL!</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "<i>Cloud database has been updated.</i>\n\n"
-        "⚠️ <b>Note:</b> <i>Restart the bot to apply all changes.</i>",
-        parse_mode=ParseMode.HTML
-    )
-    context.user_data['wait_import'] = False
+    
+    try:
+        file = await update.message.document.get_file()
+        raw = await file.download_as_bytearray()
+        imported_data = json.loads(raw.decode())
+        
+        # Validate imported data
+        if not isinstance(imported_data, dict):
+            await update.message.reply_text("❌ <b>INVALID FILE!</b>\n\nExpected JSON object.", parse_mode=ParseMode.HTML)
+            return
+        
+        # Clear existing jobs from job queue
+        jobs = context.job_queue.jobs()
+        cleared = 0
+        for job in jobs:
+            if job.name and isinstance(job.data, dict):
+                job.schedule_removal()
+                cleared += 1
+        
+        # Merge with defaults to ensure all keys exist
+        global DB
+        DB = {
+            "config": imported_data.get("config", {"group_id": None, "group_name": "❌ No Group Linked"}),
+            "subjects": imported_data.get("subjects", {"CSDA": [], "AICS": []}),
+            "active_jobs": imported_data.get("active_jobs", []),
+            "attendance": imported_data.get("attendance", {}),
+            "feedback": imported_data.get("feedback", []),
+            "system_stats": imported_data.get("system_stats", {"start_time": time.time(), "classes_scheduled": 0, "ai_requests": 0}),
+            "schedules": imported_data.get("schedules", []),
+            "admins": imported_data.get("admins", []),
+            "topics": imported_data.get("topics", {})
+        }
+        
+        # Save to cloud
+        save_db()
+        
+        # Restore jobs from imported data
+        restored = 0
+        now_ts = datetime.now(IST).timestamp()
+        for job_entry in DB.get("active_jobs", []):
+            try:
+                if job_entry["timestamp"] < now_ts:
+                    continue  # Skip expired jobs
+                run_dt = datetime.fromtimestamp(job_entry["timestamp"], IST)
+                context.job_queue.run_once(
+                    send_alert_job, 
+                    run_dt, 
+                    chat_id=job_entry["chat_id"], 
+                    name=job_entry["name"], 
+                    data=job_entry["data"]
+                )
+                restored += 1
+            except Exception as e:
+                logger.error(f"Failed to restore job: {e}")
+                continue
+        
+        await update.message.reply_text(
+            "✅ <b>IMPORT SUCCESSFUL!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📦 <b>Data Imported:</b>\n"
+            f"┣ 📚 Subjects: {sum(len(s) for s in DB['subjects'].values())}\n"
+            f"┣ 📅 Schedules Restored: {restored}\n"
+            f"┣ 💬 Topics: {len(DB.get('topics', {}))}\n"
+            f"┣ 👥 Admins: {len(DB.get('admins', []))}\n"
+            f"┗ 🎯 Group: {DB['config'].get('group_name', 'None')}\n\n"
+            "✅ <i>All data is now live!</i>",
+            parse_mode=ParseMode.HTML
+        )
+        
+    except json.JSONDecodeError:
+        await update.message.reply_text("❌ <b>INVALID JSON!</b>\n\nFile is not valid JSON format.", parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logger.error(f"Import error: {e}")
+        await update.message.reply_text(f"❌ <b>IMPORT FAILED!</b>\n\n<code>{str(e)[:100]}</code>", parse_mode=ParseMode.HTML)
+    finally:
+        context.user_data['wait_import'] = False
 
 async def mark_attendance(update, context):
     query = update.callback_query
@@ -3575,7 +3664,9 @@ async def post_init(app):
         BotCommand("topics", "💬 View Topics"),
         BotCommand("edittopic", "✏️ Edit Topic"),
         BotCommand("deletetopic", "🗑️ Delete Topic"),
+        BotCommand("verifytopics", "🔄 Verify Topics"),
         BotCommand("attendance", "📊 Attendance Report"),
+        BotCommand("refresh", "🔄 Refresh Database"),
         BotCommand("export", "📤 Export Data"),
         BotCommand("reset", "🔄 Reset & Fix Issues"),
         BotCommand("resetdatabase", "🧨 Factory Reset"),
