@@ -2141,6 +2141,7 @@ async def cmsg_start_date(update, context):
         logger.error(f"Error in cmsg_start_date: {e}")
         return ConversationHandler.END
 
+async def cmsg_end_date(update, context):
     """Handle end date input"""
     try:
         text = update.message.text.strip().lower()
