@@ -307,8 +307,10 @@ def cleanup_old_data():
     REMOVE_ADMIN_INPUT, CUSTOM_OFFSET_INPUT, NIGHT_SCHEDULE_TIME,
     CUSTOM_MSG_BATCH, CUSTOM_MSG_TIME, CUSTOM_MSG_START, CUSTOM_MSG_END,
     CUSTOM_MSG_TEXT, CUSTOM_MSG_LINK,
-    SELECT_TOPIC, ADD_TOPIC_NAME, ADD_TOPIC_ID, REMOVE_TOPIC_INPUT
-) = range(29)
+    SELECT_TOPIC, ADD_TOPIC_NAME, ADD_TOPIC_ID, REMOVE_TOPIC_INPUT,
+    EDIT_SUB_SELECT_BATCH, EDIT_SUB_SELECT_SUBJECT, EDIT_SUB_ACTION, EDIT_SUB_NEW_NAME,
+    RESET_CONFIRM
+) = range(34)
 
 # Regex to match any menu button for canceling wizards
 MENU_REGEX = "^(📸 AI Auto-Schedule|🧠 Custom AI|🟦 Schedule CSDA|🟧 Schedule AICS|📝 Custom Message|➕ Add Subject|📂 More Options|✏️ Edit Class|🗑️ Delete Class|📅 View Schedule|📊 Attendance|📚 All Subjects|📤 Export Data|📥 Import Data|👥 Manage Admins|💬 Manage Topics|🛠️ Admin Tools|🔙 Back to Main|🌙 Night Schedule|☁️ Force Save|🔄 Reset System)$"
@@ -2463,6 +2465,210 @@ async def reset_command(update, context):
     )
 
 # ==============================================================================
+# 🧨 15. RESET DATABASE COMMAND
+# ==============================================================================
+async def start_reset_db(update, context):
+    """Start the reset database conversation"""
+    if not await require_private_admin(update, context): return ConversationHandler.END
+    
+    kb = [
+        [InlineKeyboardButton("💣 YES, DELETE EVERYTHING", callback_data="reset_confirm")],
+        [InlineKeyboardButton("🔙 Cancel", callback_data="reset_cancel")]
+    ]
+    
+    await update.message.reply_text(
+        "⚠️ <b>DANGER ZONE: RESET DATABASE</b> ⚠️\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "😱 <b>ARE YOU SURE?</b>\n"
+        "<i>This will permanently delete:</i>\n"
+        "• All scheduled classes\n"
+        "• All subjects\n"
+        "• Attendance records\n"
+        "• System stats\n\n"
+        "👉 <i>This action CANNOT be undone!</i>",
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode=ParseMode.HTML
+    )
+    return RESET_CONFIRM
+
+async def confirm_reset_db(update, context):
+    """Execute the database reset"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "reset_cancel":
+        await query.edit_message_text(
+            "✅ <b>RESET CANCELLED</b>\n\n"
+            "<i>Your data is safe! Phew...</i> 😅",
+            parse_mode=ParseMode.HTML
+        )
+        return ConversationHandler.END
+        
+    if query.data == "reset_confirm":
+        global DB
+        # Preserve config link
+        old_config = DB.get("config", DEFAULT_DB["config"])
+        old_admins = DB.get("admins", []) # Preserve admins so they don't get locked out
+        
+        # Reset to default
+        DB = DEFAULT_DB.copy()
+        DB["config"] = old_config
+        DB["admins"] = old_admins
+        
+        # Clear schedules from memory
+        for job in context.job_queue.jobs():
+            job.schedule_removal()
+            
+        save_db()
+        
+        await query.edit_message_text(
+            "💥 <b>DATABASE WIPED!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "✅ <i>All data has been reset to factory defaults.</i>\n"
+            "✅ <i>Admins and Group link preserved.</i>\n\n"
+            "🚀 <i>Ready for a fresh start!</i>",
+            parse_mode=ParseMode.HTML
+        )
+        return ConversationHandler.END
+
+# ==============================================================================
+# ✏️ 16. EDIT SUBJECT COMMAND
+# ==============================================================================
+async def start_edit_subject(update, context):
+    """Start the edit subject wizard"""
+    if not await require_private_admin(update, context): return ConversationHandler.END
+    
+    kb = [
+        [InlineKeyboardButton("🟦 CSDA", callback_data="esub_CSDA"), 
+         InlineKeyboardButton("🟧 AICS", callback_data="esub_AICS")]
+    ]
+    await update.message.reply_text(
+        "✏️ <b>EDIT SUBJECT</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<i>Select the batch:</i> 👇",
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode=ParseMode.HTML
+    )
+    return EDIT_SUB_SELECT_BATCH
+
+async def edit_sub_select_batch(update, context):
+    """Handle batch selection and show subjects"""
+    query = update.callback_query
+    await query.answer()
+    
+    batch = query.data.split("_")[1]
+    context.user_data['esub_batch'] = batch
+    
+    subs = DB["subjects"].get(batch, [])
+    if not subs:
+        await query.edit_message_text(
+            f"⚠️ <b>NO SUBJECTS IN {batch}!</b>\n\n"
+            f"<i>Add some subjects first.</i>"
+        )
+        return ConversationHandler.END
+        
+    rows = []
+    for s in subs:
+        rows.append([InlineKeyboardButton(f"📖 {s}", callback_data=f"esub_pick_{s}")])
+    rows.append([InlineKeyboardButton("🔙 Cancel", callback_data="esub_cancel")])
+    
+    await query.edit_message_text(
+        f"✏️ <b>EDIT SUBJECT ({batch})</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"<i>Select a subject to modify:</i> 👇",
+        reply_markup=InlineKeyboardMarkup(rows),
+        parse_mode=ParseMode.HTML
+    )
+    return EDIT_SUB_SELECT_SUBJECT
+
+async def edit_sub_select_subject(update, context):
+    """Handle subject selection and show actions"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    if data == "esub_cancel":
+        await query.edit_message_text("❌ Cancelled.")
+        return ConversationHandler.END
+        
+    sub = data.replace("esub_pick_", "")
+    context.user_data['esub_subject'] = sub
+    
+    kb = [
+        [InlineKeyboardButton("✏️ Rename", callback_data="esub_rename")],
+        [InlineKeyboardButton("🗑️ Delete", callback_data="esub_delete")],
+        [InlineKeyboardButton("🔙 Cancel", callback_data="esub_cancel")]
+    ]
+    
+    await query.edit_message_text(
+        f"🛠️ <b>MANAGE: {sub}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"<i>What would you like to do?</i>",
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode=ParseMode.HTML
+    )
+    return EDIT_SUB_ACTION
+
+async def edit_sub_action(update, context):
+    """Handle rename or delete action"""
+    query = update.callback_query
+    await query.answer()
+    
+    action = query.data
+    if action == "esub_cancel":
+        await query.edit_message_text("❌ Cancelled.")
+        return ConversationHandler.END
+        
+    if action == "esub_delete":
+        batch = context.user_data['esub_batch']
+        sub = context.user_data['esub_subject']
+        
+        if sub in DB["subjects"][batch]:
+            DB["subjects"][batch].remove(sub)
+            save_db()
+            
+        await query.edit_message_text(
+            f"🗑️ <b>DELETED!</b>\n\n"
+            f"✅ <i>{sub} has been removed from {batch}.</i>",
+            parse_mode=ParseMode.HTML
+        )
+        return ConversationHandler.END
+        
+    if action == "esub_rename":
+        await query.edit_message_text(
+            "✍️ <b>RENAME SUBJECT</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "<i>Enter the new name:</i>",
+            parse_mode=ParseMode.HTML
+        )
+        return EDIT_SUB_NEW_NAME
+
+async def edit_sub_save_rename(update, context):
+    """Save the renamed subject"""
+    new_name = update.message.text.strip()
+    batch = context.user_data['esub_batch']
+    old_name = context.user_data['esub_subject']
+    
+    if new_name == old_name:
+        await update.message.reply_text("⚠️ Name is same as before.")
+        return ConversationHandler.END
+        
+    if old_name in DB["subjects"][batch]:
+        # Rename in list (preserve order)
+        idx = DB["subjects"][batch].index(old_name)
+        DB["subjects"][batch][idx] = new_name
+        save_db()
+        
+    await update.message.reply_text(
+        f"✅ <b>RENAMED!</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🔄 <b>{old_name}</b> ➡️ <b>{new_name}</b>\n"
+        f"<i>Database updated.</i>",
+        parse_mode=ParseMode.HTML
+    )
+    return ConversationHandler.END
+
+# ==============================================================================
 # 🛠️ ADMIN COMMAND SHORTCUTS
 # ==============================================================================
 async def admin_command(update, context):
@@ -2549,6 +2755,8 @@ async def post_init(app):
         BotCommand("attendance", "📊 Attendance Report"),
         BotCommand("export", "📤 Export Data"),
         BotCommand("reset", "🔄 Reset & Fix Issues"),
+        BotCommand("resetdatabase", "🧨 Reset Database (Danger)"),
+        BotCommand("editsubject", "✏️ Edit Subjects"),
         BotCommand("feedback", "💬 Send Feedback"),
     ]
     
@@ -2758,6 +2966,27 @@ def main():
         states={REMOVE_TOPIC_INPUT: [MessageHandler(txt_filter, remove_topic_save)]},
         fallbacks=[MessageHandler(filters.Regex(MENU_REGEX), cancel_wizard), CommandHandler("cancel", cancel_wizard)],
         conversation_timeout=300
+    ))
+
+    # Edit Subject Handler
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("editsubject", start_edit_subject)],
+        states={
+            EDIT_SUB_SELECT_BATCH: [CallbackQueryHandler(edit_sub_select_batch, pattern="^esub_")],
+            EDIT_SUB_SELECT_SUBJECT: [CallbackQueryHandler(edit_sub_select_subject, pattern="^esub_")],
+            EDIT_SUB_ACTION: [CallbackQueryHandler(edit_sub_action, pattern="^esub_")],
+            EDIT_SUB_NEW_NAME: [MessageHandler(txt_filter, edit_sub_save_rename)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_wizard), MessageHandler(filters.Regex(MENU_REGEX), cancel_wizard)],
+        conversation_timeout=300
+    ))
+
+    # Reset Database Handler
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("resetdatabase", start_reset_db)],
+        states={RESET_CONFIRM: [CallbackQueryHandler(confirm_reset_db, pattern="^reset_")]},
+        fallbacks=[CommandHandler("cancel", cancel_wizard)],
+        conversation_timeout=60
     ))
 
     app.add_handler(CallbackQueryHandler(handle_expired))
