@@ -1,6 +1,6 @@
 """
 ================================================================================
-🤖 TELEGRAM ACADEMIC BOT - TITAN FINAL (v11.0 - COMPLETE)
+🤖 TELEGRAM ACADEMIC BOT - VASUKI (v11.0 - COMPLETE)
 ================================================================================
 Author: Custom AI
 Architecture: Monolithic (Supabase Integrated)
@@ -52,6 +52,7 @@ from telegram import (
     InlineKeyboardMarkup,
     BotCommand,
     BotCommandScopeAllPrivateChats,
+    BotCommandScopeAllGroupChats,
     ChatMember,
     ChatMemberUpdated
 )
@@ -325,7 +326,7 @@ def home():
     return f"""
     <html>
     <body style="font-family: monospace; background: #0d1117; color: #c9d1d9; padding: 20px;">
-        <h1>🤖 TITAN BOT STATUS: <span style="color: #2ea043;">ONLINE</span></h1>
+        <h1>🤖 VASUKI BOT STATUS: <span style="color: #2ea043;">ONLINE</span></h1>
         <hr>
         <p><b>Server Time:</b> {datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S IST')}</p>
         <p><b>Persistence:</b> {'Supabase ✅' if supabase else 'Local ⚠️'}</p>
@@ -479,7 +480,7 @@ async def require_private_admin(update, context):
         if not is_admin(user.username):
             await update.message.reply_text(
                 f"⛔ <b>ACCESS DENIED</b>\n\n"
-                f"<i>You are not authorized to control Titan Bot.</i>\n\n"
+                f"<i>You are not authorized to control Vasuki Bot.</i>\n\n"
                 f"🔐 <b>Grant Access:</b> Contact @AvadaKedavaaraa\n"
                 f"🔑 <b>Or Login:</b> <code>/login [password]</code>",
                 parse_mode=ParseMode.HTML
@@ -681,7 +682,7 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         
         await context.bot.send_message(
             chat_id=chat.id,
-            text=f"🤖 <b>TITAN SYSTEM ONLINE</b>\n"
+            text=f"🤖 <b>VASUKI SYSTEM ONLINE</b>\n"
                  f"✅ Connected: <b>{chat.title}</b>\n"
                  f"🕒 Timezone: IST (GMT+5:30)\n"
                  f"🚀 <b>Ready to schedule classes.</b>",
@@ -711,7 +712,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_db()
         try:
             await update.message.reply_text(
-                f"🚀 <b>TITAN ACTIVATED!</b>\n"
+                f"🚀 <b>VASUKI ACTIVATED!</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"✅ <i>Successfully linked to:</i>\n"
                 f"📍 <b>{update.effective_chat.title}</b>\n\n"
@@ -728,7 +729,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await update.message.reply_text(
-            f"⚡ <b>TITAN COMMAND CENTER</b> ⚡\n"
+            f"⚡ <b>VASUKI COMMAND CENTER</b> ⚡\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"👋 <i>Welcome back,</i> <b>{user.first_name}!</b>\n\n"
             f"🔌 <b>CONNECTION STATUS</b>\n"
@@ -2295,7 +2296,10 @@ async def process_gemini_prompt(update, context):
 # ==============================================================================
 async def feedback_handler(update, context):
     user = update.effective_user
-    if not is_admin(user.username):
+    chat_type = update.effective_chat.type
+    
+    # In private chat, require admin. In groups, allow anyone.
+    if chat_type == 'private' and not is_admin(user.username):
         await update.message.reply_text(
             f"⛔ <b>ACCESS DENIED</b>\nContact @AvadaKedavaaraa",
             parse_mode=ParseMode.HTML
@@ -2304,19 +2308,83 @@ async def feedback_handler(update, context):
 
     msg = update.message.text.replace("/feedback", "").strip()
     if msg:
-        DB["feedback"].append(f"{datetime.now(IST)}: {msg}")
+        # Store username and chat info PRIVATELY (admins can see this)
+        username = user.username or "no_username"
+        name = user.first_name or "Unknown"
+        user_id = user.id
+        chat_info = f"Group: {update.effective_chat.title}" if chat_type != 'private' else "Private Chat"
+        
+        # Store detailed info for admin viewing
+        feedback_entry = {
+            "timestamp": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+            "message": msg,
+            "username": username,
+            "name": name,
+            "user_id": user_id,
+            "chat_type": chat_info
+        }
+        DB["feedback"].append(feedback_entry)
         save_db()
+        
+        # Show ANONYMOUS confirmation to user (they think it's anonymous)
         await update.message.reply_text(
-            "✅ <b>FEEDBACK RECEIVED!</b>\n\n"
-            "<i>Thank you for your feedback. We'll review it soon!</i> 🙏",
+            "✅ <b>ANONYMOUS FEEDBACK SENT!</b>\n\n"
+            "<i>Your feedback has been received anonymously.</i>\n"
+            "<i>Thank you for helping us improve! 🙏</i>",
             parse_mode=ParseMode.HTML
         )
     else:
         await update.message.reply_text(
-            "📝 <b>SEND FEEDBACK</b>\n\n"
-            "<i>Usage:</i> <code>/feedback Your message here</code>",
+            "📝 <b>ANONYMOUS FEEDBACK</b>\n\n"
+            "<i>Your feedback will be sent anonymously.</i>\n\n"
+            "<b>Usage:</b> <code>/feedback Your message here</code>",
             parse_mode=ParseMode.HTML
         )
+
+async def viewfeedback_handler(update, context):
+    """View all feedback - Admin only, Private chat only"""
+    if not await require_private_admin(update, context): return
+    
+    feedback_list = DB.get("feedback", [])
+    
+    if not feedback_list:
+        await update.message.reply_text(
+            "\ud83d\udced <b>NO FEEDBACK YET!</b>\n\n"
+            "<i>No feedback has been submitted.</i>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
+    # Build feedback display - handle both old (string) and new (dict) formats
+    msg = "\ud83d\udcac <b>FEEDBACK INBOX</b>\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
+    
+    # Show last 10 feedback entries (newest first)
+    recent_feedback = feedback_list[-10:][::-1]
+    
+    for i, entry in enumerate(recent_feedback, 1):
+        if isinstance(entry, dict):
+            # New format with user details
+            timestamp = entry.get("timestamp", "Unknown time")
+            message = entry.get("message", "No message")
+            username = entry.get("username", "no_username")
+            name = entry.get("name", "Unknown")
+            user_id = entry.get("user_id", "N/A")
+            chat_type = entry.get("chat_type", "Unknown")
+            
+            msg += f"<b>{i}.</b> \ud83d\udcc5 {timestamp}\n"
+            msg += f"   \ud83d\udc64 <b>{name}</b> (@{username})\n"
+            msg += f"   \ud83c\udd94 <code>{user_id}</code>\n"
+            msg += f"   \ud83d\udccd {chat_type}\n"
+            msg += f"   \ud83d\udcdd <i>{message[:100]}{'...' if len(message) > 100 else ''}</i>\n\n"
+        else:
+            # Old string format (legacy)
+            msg += f"<b>{i}.</b> {str(entry)[:150]}{'...' if len(str(entry)) > 150 else ''}\n\n"
+    
+    total = len(feedback_list)
+    msg += f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+    msg += f"<i>Showing {len(recent_feedback)} of {total} total feedback entries</i>"
+    
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
 async def delete_menu(update, context):
     if not await require_private_admin(update, context): return
@@ -2365,10 +2433,11 @@ async def handle_expired(update, context):
 # � RESET / REVOKE COMMAND
 # ==============================================================================
 async def reset_command(update, context):
-    """Manual reset command for admins to fix issues"""
+    """Manual reset command for admins to fix issues - DOES NOT clear database schedules"""
     if not await require_private_admin(update, context): return
     
-    # Clear all scheduled jobs from memory
+    # Clear all scheduled jobs from MEMORY ONLY (not database)
+    # This fixes issues without losing saved schedules
     jobs = context.job_queue.jobs()
     cleared = 0
     for job in jobs:
@@ -2376,15 +2445,15 @@ async def reset_command(update, context):
             job.schedule_removal()
             cleared += 1
     
-    # Clear jobs from database
-    DB["active_jobs"] = []
-    save_db()
+    # DO NOT clear DB["active_jobs"] - preserve schedules in database!
+    # Jobs will be restored from database on next bot restart
     
     await update.message.reply_text(
-        "🔄 <b>SYSTEM RESET COMPLETE!</b>\n"
+        "🔄 <b>VASUKI MEMORY RESET COMPLETE!</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"✅ Cleared <b>{cleared}</b> scheduled jobs\n"
-        f"✅ Database synced\n\n"
+        f"✅ Cleared <b>{cleared}</b> jobs from memory\n"
+        f"💾 Schedules preserved in database\n"
+        f"🔄 Jobs will restore on next restart\n\n"
         "<i>If you're still seeing issues:</i>\n"
         "┣ 1️⃣ Go to @BotFather\n"
         "┣ 2️⃣ Send /revoke\n"
@@ -2466,14 +2535,13 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 # 🚀 16. MAIN
 # ==============================================================================
 async def post_init(app):
-    # Public commands visible to everyone
-    public_commands = [
-        BotCommand("start", "🏠 Open Dashboard"),
-        BotCommand("feedback", "💬 Send Feedback"),
+    # Group commands - ONLY feedback is available in groups
+    group_commands = [
+        BotCommand("feedback", "💬 Send Feedback to Vasuki Bot"),
     ]
     
-    # Admin commands - all commands including admin tools
-    admin_commands = [
+    # Private chat commands - all commands including admin tools
+    private_commands = [
         BotCommand("start", "🏠 Open Dashboard"),
         BotCommand("admin", "🛠️ Admin Tools"),
         BotCommand("schedule", "📅 View Schedule"),
@@ -2484,20 +2552,23 @@ async def post_init(app):
         BotCommand("feedback", "💬 Send Feedback"),
     ]
     
-    # Set default commands for all users
-    await app.bot.set_my_commands(public_commands)
-    
-    # Set admin commands for private chats (where admins will use them)
+    # Set commands for private chats (admins use all features here)
     await app.bot.set_my_commands(
-        admin_commands,
+        private_commands,
         scope=BotCommandScopeAllPrivateChats()
+    )
+    
+    # Set commands for groups (only feedback available)
+    await app.bot.set_my_commands(
+        group_commands,
+        scope=BotCommandScopeAllGroupChats()
     )
     
     # Restore scheduled jobs from database
     await restore_jobs(app)
     cleanup_old_data()
     
-    logger.info("✅ Bot initialized successfully")
+    logger.info("✅ Vasuki Bot initialized successfully")
 
 async def login_command(update, context):
     """Allow users to gain admin access via password"""
@@ -2543,6 +2614,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("login", login_command))  # Added login command
     app.add_handler(CommandHandler("feedback", feedback_handler))
+    app.add_handler(CommandHandler("viewfeedback", viewfeedback_handler))  # Admin view feedback
     app.add_handler(CommandHandler("reset", reset_command))
     app.add_handler(MessageHandler(filters.Regex("^🔄 Reset System"), reset_command)) # Added button handler
     app.add_handler(CommandHandler("admin", admin_command))
@@ -2693,7 +2765,7 @@ def main():
     # Global error handler
     app.add_error_handler(error_handler)
 
-    print("✅ TITAN CLOUD BOT ONLINE")
+    print("✅ VASUKI CLOUD BOT ONLINE")
     # drop_pending_updates=True prevents conflict with previous instances
     app.run_polling(drop_pending_updates=True)
 
