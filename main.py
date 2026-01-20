@@ -250,6 +250,55 @@ async def force_cloud_save(update, context):
             parse_mode=ParseMode.HTML
         )
 
+def refresh_db():
+    """Reload database from Supabase - for live sync without restart"""
+    global DB
+    if not supabase:
+        logger.warning("⚠️ Cannot refresh: No Supabase connection")
+        return False
+    
+    try:
+        response = supabase.table("bot_storage").select("data").eq("id", 1).execute()
+        if response.data and len(response.data) > 0:
+            cloud_data = response.data[0]['data']
+            if cloud_data:
+                # Preserve only runtime data, update everything else
+                old_active_jobs = DB.get("active_jobs", [])
+                DB.update(cloud_data)
+                # Keep local active_jobs if cloud has none (runtime jobs)
+                if not cloud_data.get("active_jobs"):
+                    DB["active_jobs"] = old_active_jobs
+                logger.info("🔄 Database refreshed from Supabase")
+                return True
+    except Exception as e:
+        logger.error(f"❌ Refresh failed: {e}")
+    return False
+
+async def refresh_db_command(update, context):
+    """Manual database refresh command"""
+    if not await require_private_admin(update, context): return
+    
+    msg = await update.message.reply_text(
+        "🔄 <b>REFRESHING DATABASE...</b>",
+        parse_mode=ParseMode.HTML
+    )
+    
+    loop = asyncio.get_event_loop()
+    success = await loop.run_in_executor(None, refresh_db)
+    
+    if success:
+        await msg.edit_text(
+            "✅ <b>DATABASE REFRESHED!</b>\n\n"
+            "<i>Supabase changes are now live.</i>",
+            parse_mode=ParseMode.HTML
+        )
+    else:
+        await msg.edit_text(
+            "❌ <b>REFRESH FAILED!</b>\n\n"
+            "<i>Check logs for details.</i>",
+            parse_mode=ParseMode.HTML
+        )
+
 load_db()
 
 # ------------------------------------------------------------------------------
@@ -309,8 +358,9 @@ def cleanup_old_data():
     CUSTOM_MSG_TEXT, CUSTOM_MSG_LINK,
     SELECT_TOPIC, ADD_TOPIC_NAME, ADD_TOPIC_ID, REMOVE_TOPIC_INPUT,
     EDIT_SUB_SELECT_BATCH, EDIT_SUB_SELECT_SUBJECT, EDIT_SUB_ACTION, EDIT_SUB_NEW_NAME,
-    RESET_CONFIRM, EDIT_TOPIC_SELECT, EDIT_TOPIC_NEW_NAME, DELETE_TOPIC_CONFIRM
-) = range(37)
+    RESET_CONFIRM, EDIT_TOPIC_SELECT, EDIT_TOPIC_NEW_NAME, DELETE_TOPIC_CONFIRM,
+    EDIT_SELECT_SCOPE, EDIT_BULK_DAYS
+) = range(39)
 
 # Regex to match any menu button for canceling wizards
 MENU_REGEX = "^(📸 AI Auto-Schedule|🧠 Custom AI|🟦 Schedule CSDA|🟧 Schedule AICS|📝 Custom Message|➕ Add Subject|📂 More Options|✏️ Edit Class|🗑️ Delete Class|📅 View Schedule|📊 Attendance|📚 All Subjects|📤 Export Data|📥 Import Data|👥 Manage Admins|💬 Manage Topics|🛠️ Admin Tools|🔙 Back to Main|🌙 Night Schedule|☁️ Force Save|🔄 Reset System)$"
@@ -1325,22 +1375,52 @@ async def save_new_sub(update, context):
 async def start_edit(update, context):
     if not await require_private_admin(update, context): return ConversationHandler.END
     jobs = context.job_queue.jobs()
-    if not jobs:
+    
+    # Filter valid class jobs
+    class_jobs = [j for j in jobs if j.name and isinstance(j.data, dict) and 'batch' in j.data and len(f"edit_{j.name}") <= 64]
+    
+    if not class_jobs:
         await update.message.reply_text(
             "📭 <b>NO CLASSES FOUND!</b>\n\n"
             "<i>Schedule some classes first.</i>",
             parse_mode=ParseMode.HTML
         )
         return ConversationHandler.END
+    
+    # Sort by time
+    class_jobs.sort(key=lambda j: j.next_t)
+    
+    # Pagination - max 8 per page
+    PAGE_SIZE = 8
+    page = context.user_data.get('edit_page', 0)
+    total_pages = (len(class_jobs) + PAGE_SIZE - 1) // PAGE_SIZE
+    
+    start_idx = page * PAGE_SIZE
+    end_idx = min(start_idx + PAGE_SIZE, len(class_jobs))
+    page_jobs = class_jobs[start_idx:end_idx]
+    
     rows = []
-    for job in jobs:
-        if job.name and isinstance(job.data, dict) and 'batch' in job.data:
-            if len(f"edit_{job.name}") > 64: continue
-            d = job.data
-            rows.append([InlineKeyboardButton(f"📖 {d['batch']} {d['subject']} ({d['time_display']})", callback_data=f"edit_{job.name}")])
+    for job in page_jobs:
+        d = job.data
+        try:
+            time_str = job.next_t.strftime("%d %b %H:%M")
+        except:
+            time_str = d.get('time_display', '')
+        rows.append([InlineKeyboardButton(f"📖 {d['batch']} {d['subject'][:15]} ({time_str})", callback_data=f"edit_{job.name}")])
+    
+    # Add navigation buttons if needed
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data="edit_page_prev"))
+    if page < total_pages - 1:
+        nav_row.append(InlineKeyboardButton("➡️ Next", callback_data="edit_page_next"))
+    if nav_row:
+        rows.append(nav_row)
+    
     await update.message.reply_text(
-        "✏️ <b>EDIT CLASS</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"✏️ <b>EDIT CLASS</b> ({len(class_jobs)} total)\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"<i>Page {page + 1}/{total_pages}</i>\n\n"
         "<i>Select a class to modify:</i> 👇",
         reply_markup=InlineKeyboardMarkup(rows),
         parse_mode=ParseMode.HTML
@@ -1350,7 +1430,58 @@ async def start_edit(update, context):
 async def edit_select_job(update, context):
     query = update.callback_query
     await query.answer()
+    
+    # Handle pagination
+    if query.data in ["edit_page_prev", "edit_page_next"]:
+        current_page = context.user_data.get('edit_page', 0)
+        if query.data == "edit_page_prev":
+            context.user_data['edit_page'] = max(0, current_page - 1)
+        else:
+            context.user_data['edit_page'] = current_page + 1
+        
+        # Rebuild the class list for new page
+        jobs = context.job_queue.jobs()
+        class_jobs = [j for j in jobs if j.name and isinstance(j.data, dict) and 'batch' in j.data and len(f"edit_{j.name}") <= 64]
+        class_jobs.sort(key=lambda j: j.next_t)
+        
+        PAGE_SIZE = 8
+        page = context.user_data['edit_page']
+        total_pages = (len(class_jobs) + PAGE_SIZE - 1) // PAGE_SIZE
+        
+        start_idx = page * PAGE_SIZE
+        end_idx = min(start_idx + PAGE_SIZE, len(class_jobs))
+        page_jobs = class_jobs[start_idx:end_idx]
+        
+        rows = []
+        for job in page_jobs:
+            d = job.data
+            try:
+                time_str = job.next_t.strftime("%d %b %H:%M")
+            except:
+                time_str = d.get('time_display', '')
+            rows.append([InlineKeyboardButton(f"📖 {d['batch']} {d['subject'][:15]} ({time_str})", callback_data=f"edit_{job.name}")])
+        
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data="edit_page_prev"))
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton("➡️ Next", callback_data="edit_page_next"))
+        if nav_row:
+            rows.append(nav_row)
+        
+        await query.edit_message_text(
+            f"✏️ <b>EDIT CLASS</b> ({len(class_jobs)} total)\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"<i>Page {page + 1}/{total_pages}</i>\n\n"
+            "<i>Select a class to modify:</i> 👇",
+            reply_markup=InlineKeyboardMarkup(rows),
+            parse_mode=ParseMode.HTML
+        )
+        return EDIT_SELECT_JOB
+    
+    # Handle class selection
     context.user_data['edit_job_name'] = query.data.replace("edit_", "")
+    context.user_data['edit_page'] = 0  # Reset page for next time
     jobs = context.job_queue.get_jobs_by_name(context.user_data['edit_job_name'])
     if not jobs: return ConversationHandler.END
     job_data = jobs[0].data
@@ -1401,67 +1532,158 @@ async def edit_choose_field(update, context):
     return EDIT_NEW_VALUE
 
 async def edit_save(update, context):
+    """Store new value and show scope selection"""
     new_val = update.message.text
     field = context.user_data['edit_field']
-    original_name = context.user_data['edit_job_name']
     
-    jobs = context.job_queue.get_jobs_by_name(original_name)
-    if not jobs:
-        await update.message.reply_text("❌ <b>JOB NOT FOUND!</b>\nIt may have run already.")
-        return ConversationHandler.END
-        
-    job = jobs[0]
-    data = job.data
-    next_t = context.user_data['old_next_t']
-    
-    # Update Data
+    # Validate input first
     if field == "time":
         try:
             h, m = map(int, new_val.split(":"))
-            next_t = next_t.replace(hour=h, minute=m)
-            data['time_display'] = new_val
+            if not (0 <= h <= 23 and 0 <= m <= 59):
+                raise ValueError
         except:
-            await update.message.reply_text("❌ <b>INVALID TIME!</b> Use HH:MM")
-            return ConversationHandler.END
+            await update.message.reply_text("❌ <b>INVALID TIME!</b> Use HH:MM (00:00-23:59)", parse_mode=ParseMode.HTML)
+            return EDIT_NEW_VALUE
             
     elif field == "date":
         try:
-            d = datetime.strptime(new_val, "%Y-%m-%d")
-            next_t = next_t.replace(year=d.year, month=d.month, day=d.day)
+            datetime.strptime(new_val, "%Y-%m-%d")
         except:
-            await update.message.reply_text("❌ <b>INVALID DATE!</b> Use YYYY-MM-DD")
-            return ConversationHandler.END
-            
-    elif field == "link":
-        data['link'] = new_val
-        
-    elif field == "msg":
-        data['manual_msg'] = new_val
-        
+            await update.message.reply_text("❌ <b>INVALID DATE!</b> Use YYYY-MM-DD", parse_mode=ParseMode.HTML)
+            return EDIT_NEW_VALUE
+    
     elif field == "topic":
-        try:
-            tid = int(new_val) if new_val.isdigit() and int(new_val) > 0 else None
-            data['message_thread_id'] = tid
-        except:
-            await update.message.reply_text("❌ <b>INVALID TOPIC ID!</b>")
-            return ConversationHandler.END
-
-    # Reschedule
-    chat_id = job.chat_id
-    job.schedule_removal()
+        if not (new_val.isdigit() or new_val == "0"):
+            await update.message.reply_text("❌ <b>INVALID TOPIC ID!</b> Numbers only", parse_mode=ParseMode.HTML)
+            return EDIT_NEW_VALUE
     
-    new_job_id = f"{data['batch']}_{int(time.time())}"
-    context.job_queue.run_once(job.callback, next_t, chat_id=chat_id, name=new_job_id, data=data)
+    # Store the new value
+    context.user_data['edit_new_value'] = new_val
     
-    # Update DB
-    remove_job_from_db(original_name)
-    add_job_to_db(new_job_id, next_t.timestamp(), chat_id, data)
+    # Get job info for scope display
+    original_name = context.user_data['edit_job_name']
+    jobs = context.job_queue.get_jobs_by_name(original_name)
+    if not jobs:
+        await update.message.reply_text("❌ <b>JOB NOT FOUND!</b>", parse_mode=ParseMode.HTML)
+        return ConversationHandler.END
+    
+    job = jobs[0]
+    subject = job.data.get('subject', 'Unknown')
+    batch = job.data.get('batch', 'Unknown')
+    day_name = job.next_t.strftime('%A')
+    
+    # Count matching jobs for display
+    all_jobs = context.job_queue.jobs()
+    same_subject_count = len([j for j in all_jobs if j.data.get('subject') == subject and j.data.get('batch') == batch])
+    same_day_count = len([j for j in all_jobs if j.data.get('subject') == subject and j.data.get('batch') == batch and j.next_t.strftime('%A') == day_name])
+    
+    kb = [
+        [InlineKeyboardButton(f"🎯 This Class Only", callback_data="scope_single")],
+        [InlineKeyboardButton(f"📅 All {subject} on {day_name} ({same_day_count})", callback_data="scope_day")],
+        [InlineKeyboardButton(f"📚 All {subject} ({same_subject_count})", callback_data="scope_subject")],
+        [InlineKeyboardButton("🔙 Cancel", callback_data="scope_cancel")]
+    ]
     
     await update.message.reply_text(
-        "✅ <b>UPDATE SAVED!</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🔧 <i>Field:</i> <b>{field.upper()}</b>\n"
-        f"📝 <i>New Value:</i> {new_val}",
+        f"✅ <b>APPLY TO WHICH CLASSES?</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📖 Subject: <b>{subject}</b>\n"
+        f"🎯 Batch: <b>{batch}</b>\n"
+        f"🔧 Change: <b>{field.upper()}</b> → <code>{new_val[:30]}</code>\n\n"
+        f"<i>Select scope:</i> 👇",
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode=ParseMode.HTML
+    )
+    return EDIT_SELECT_SCOPE
+
+async def edit_scope_handler(update, context):
+    """Handle scope selection and apply edits"""
+    query = update.callback_query
+    await query.answer()
+    scope = query.data.replace("scope_", "")
+    
+    if scope == "cancel":
+        await query.edit_message_text("❌ Edit cancelled.")
+        return ConversationHandler.END
+    
+    # Get stored edit data
+    field = context.user_data['edit_field']
+    new_val = context.user_data['edit_new_value']
+    original_name = context.user_data['edit_job_name']
+    
+    # Get original job for reference
+    jobs = context.job_queue.get_jobs_by_name(original_name)
+    if not jobs:
+        await query.edit_message_text("❌ <b>JOB NOT FOUND!</b>", parse_mode=ParseMode.HTML)
+        return ConversationHandler.END
+    
+    ref_job = jobs[0]
+    subject = ref_job.data.get('subject')
+    batch = ref_job.data.get('batch')
+    ref_day = ref_job.next_t.strftime('%A')
+    
+    # Find jobs to edit based on scope
+    all_jobs = context.job_queue.jobs()
+    jobs_to_edit = []
+    
+    if scope == "single":
+        jobs_to_edit = [ref_job]
+    elif scope == "day":
+        jobs_to_edit = [j for j in all_jobs if j.data.get('subject') == subject and j.data.get('batch') == batch and j.next_t.strftime('%A') == ref_day]
+    elif scope == "subject":
+        jobs_to_edit = [j for j in all_jobs if j.data.get('subject') == subject and j.data.get('batch') == batch]
+    
+    if not jobs_to_edit:
+        await query.edit_message_text("❌ <b>NO MATCHING JOBS!</b>", parse_mode=ParseMode.HTML)
+        return ConversationHandler.END
+    
+    # Apply edits to all matching jobs
+    edited_count = 0
+    for job in jobs_to_edit:
+        try:
+            data = job.data.copy()
+            next_t = job.next_t
+            chat_id = job.chat_id
+            old_name = job.name
+            
+            # Apply the edit
+            if field == "time":
+                h, m = map(int, new_val.split(":"))
+                next_t = next_t.replace(hour=h, minute=m)
+                data['time_display'] = new_val
+            elif field == "date":
+                d = datetime.strptime(new_val, "%Y-%m-%d")
+                next_t = next_t.replace(year=d.year, month=d.month, day=d.day)
+            elif field == "link":
+                data['link'] = new_val
+            elif field == "msg":
+                data['manual_msg'] = new_val
+            elif field == "topic":
+                tid = int(new_val) if new_val != "0" else None
+                data['message_thread_id'] = tid
+            
+            # Reschedule
+            job.schedule_removal()
+            new_job_id = f"{data['batch']}_{int(time.time())}_{edited_count}"
+            context.job_queue.run_once(send_alert_job, next_t, chat_id=chat_id, name=new_job_id, data=data)
+            
+            # Update DB
+            remove_job_from_db(old_name)
+            add_job_to_db(new_job_id, next_t.timestamp(), chat_id, data)
+            edited_count += 1
+            
+        except Exception as e:
+            logger.error(f"Failed to edit job {job.name}: {e}")
+            continue
+    
+    scope_text = {"single": "this class", "day": f"all {subject} on {ref_day}", "subject": f"all {subject}"}
+    await query.edit_message_text(
+        f"✅ <b>BULK EDIT COMPLETE!</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📊 <b>{edited_count}</b> classes updated\n"
+        f"🔧 <b>{field.upper()}</b> → <code>{new_val[:30]}</code>\n"
+        f"📌 Applied to: <i>{scope_text.get(scope, scope)}</i>",
         parse_mode=ParseMode.HTML
     )
     return ConversationHandler.END
@@ -2733,9 +2955,11 @@ async def viewfeedback_handler(update, context):
     await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
 async def delete_menu(update, context):
+    """Delete classes with pagination - single message UI"""
     if not await require_private_admin(update, context): return
     jobs = context.job_queue.jobs()
     valid_jobs = [j for j in jobs if j.name and isinstance(j.data, dict) and 'batch' in j.data and len(f"kill_{j.name}") <= 64]
+    valid_jobs.sort(key=lambda j: j.next_t)
     
     if not valid_jobs:
         await update.message.reply_text(
@@ -2745,32 +2969,129 @@ async def delete_menu(update, context):
         )
         return
     
-    await update.message.reply_text(
-        "🗑️ <b>DELETE CLASSES</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "<i>Tap</i> ❌ <i>to remove a class:</i>\n",
-        parse_mode=ParseMode.HTML
+    # Store jobs in context for pagination
+    context.user_data['delete_jobs'] = [j.name for j in valid_jobs]
+    context.user_data['delete_page'] = 0
+    
+    await show_delete_page(update.message, context, valid_jobs)
+
+async def show_delete_page(message_or_query, context, valid_jobs=None, edit=False):
+    """Show delete page with pagination"""
+    if valid_jobs is None:
+        jobs = context.job_queue.jobs()
+        job_names = context.user_data.get('delete_jobs', [])
+        valid_jobs = [j for j in jobs if j.name in job_names]
+        valid_jobs.sort(key=lambda j: j.next_t)
+    
+    PAGE_SIZE = 8
+    page = context.user_data.get('delete_page', 0)
+    total_pages = max(1, (len(valid_jobs) + PAGE_SIZE - 1) // PAGE_SIZE)
+    
+    # Ensure page is in bounds
+    page = min(page, total_pages - 1)
+    context.user_data['delete_page'] = page
+    
+    start_idx = page * PAGE_SIZE
+    end_idx = min(start_idx + PAGE_SIZE, len(valid_jobs))
+    page_jobs = valid_jobs[start_idx:end_idx]
+    
+    rows = []
+    for j in page_jobs:
+        d = j.data
+        try:
+            time_str = j.next_t.strftime("%d %b %H:%M")
+        except:
+            time_str = d.get('time_display', '')
+        rows.append([InlineKeyboardButton(f"❌ {d['batch']} {d['subject'][:12]} ({time_str})", callback_data=f"kill_{j.name}")])
+    
+    # Navigation and batch delete
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data="del_page_prev"))
+    if page < total_pages - 1:
+        nav_row.append(InlineKeyboardButton("➡️ Next", callback_data="del_page_next"))
+    if nav_row:
+        rows.append(nav_row)
+    
+    # Add Delete All button
+    if len(valid_jobs) > 1:
+        rows.append([InlineKeyboardButton(f"🗑️ DELETE ALL ({len(valid_jobs)})", callback_data="kill_all_confirm")])
+    
+    text = (
+        f"🗑️ <b>DELETE CLASSES</b> ({len(valid_jobs)} total)\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"<i>Page {page + 1}/{total_pages}</i>\n\n"
+        "<i>Tap to delete:</i> 👇"
     )
     
-    for j in valid_jobs:
-        kb = [[InlineKeyboardButton("❌ Delete This", callback_data=f"kill_{j.name}")]]
-        await update.message.reply_text(
-            f"📖 <b>{j.data['batch']}</b> • {j.data['subject']}\n"
-            f"     ⏰ <i>{j.data['time_display']}</i>",
-            reply_markup=InlineKeyboardMarkup(kb),
+    if edit:
+        await message_or_query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(rows),
+            parse_mode=ParseMode.HTML
+        )
+    else:
+        await message_or_query.reply_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(rows),
             parse_mode=ParseMode.HTML
         )
 
 async def handle_kill(update, context):
-    qid = update.callback_query.data.replace("kill_", "")
+    """Handle delete class callbacks - single deletion, pagination, and delete all"""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    
+    # Handle pagination
+    if data == "del_page_prev":
+        context.user_data['delete_page'] = max(0, context.user_data.get('delete_page', 0) - 1)
+        await show_delete_page(query, context, edit=True)
+        return
+    elif data == "del_page_next":
+        context.user_data['delete_page'] = context.user_data.get('delete_page', 0) + 1
+        await show_delete_page(query, context, edit=True)
+        return
+    
+    # Handle delete all confirmation
+    if data == "kill_all_confirm":
+        job_names = context.user_data.get('delete_jobs', [])
+        count = 0
+        for name in job_names:
+            jobs = context.job_queue.get_jobs_by_name(name)
+            for j in jobs:
+                j.schedule_removal()
+            remove_job_from_db(name)
+            count += 1
+        
+        context.user_data['delete_jobs'] = []
+        await query.edit_message_text(
+            f"✅ <b>DELETED {count} CLASSES!</b>\n\n"
+            "<i>All scheduled classes have been removed.</i>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
+    # Handle single class deletion
+    qid = data.replace("kill_", "")
     jobs = context.job_queue.get_jobs_by_name(qid)
-    for j in jobs: j.schedule_removal()
+    for j in jobs:
+        j.schedule_removal()
     remove_job_from_db(qid)
-    await update.callback_query.edit_message_text(
-        "✅ <b>CLASS DELETED!</b>\n\n"
-        "<i>This class has been removed from the schedule.</i>",
-        parse_mode=ParseMode.HTML
-    )
+    
+    # Update the job list and show next page
+    if 'delete_jobs' in context.user_data:
+        context.user_data['delete_jobs'] = [n for n in context.user_data['delete_jobs'] if n != qid]
+    
+    remaining = len(context.user_data.get('delete_jobs', []))
+    if remaining > 0:
+        await show_delete_page(query, context, edit=True)
+    else:
+        await query.edit_message_text(
+            "✅ <b>ALL CLASSES DELETED!</b>\n\n"
+            "<i>No more scheduled classes.</i>",
+            parse_mode=ParseMode.HTML
+        )
 
 async def handle_expired(update, context):
     await update.callback_query.answer("⚠️ Expired.", show_alert=True)
@@ -3171,6 +3492,7 @@ def main():
     app.add_handler(CommandHandler("feedback", feedback_handler))
     app.add_handler(CommandHandler("viewfeedback", viewfeedback_handler))  # Admin view feedback
     app.add_handler(CommandHandler("reset", reset_command))
+    app.add_handler(CommandHandler("refresh", refresh_db_command))  # Live DB refresh
     app.add_handler(MessageHandler(filters.Regex("^🔄 Reset System"), reset_command)) # Added button handler
     app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(CommandHandler("schedule", schedule_command))
@@ -3187,7 +3509,7 @@ def main():
     app.add_handler(MessageHandler(filters.Regex("^📥 Import"), import_request))
     app.add_handler(MessageHandler(filters.Document.MimeType("application/json"), handle_import_file))
     app.add_handler(MessageHandler(filters.Regex("^🗑️ Delete Class"), delete_menu))
-    app.add_handler(CallbackQueryHandler(handle_kill, pattern="^kill_"))
+    app.add_handler(CallbackQueryHandler(handle_kill, pattern="^(kill_|del_page_)"))
     
     # NEW: Added View All Subjects Handler
     app.add_handler(MessageHandler(filters.Regex("^📚 All Subjects"), view_all_subjects))
@@ -3217,7 +3539,8 @@ def main():
         states={
             EDIT_SELECT_JOB: [CallbackQueryHandler(edit_select_job, pattern="^edit_")],
             EDIT_CHOOSE_FIELD: [CallbackQueryHandler(edit_choose_field, pattern="^field_")],
-            EDIT_NEW_VALUE: [MessageHandler(txt_filter, edit_save)]
+            EDIT_NEW_VALUE: [MessageHandler(txt_filter, edit_save)],
+            EDIT_SELECT_SCOPE: [CallbackQueryHandler(edit_scope_handler, pattern="^scope_")]
         },
         fallbacks=[MessageHandler(filters.Regex(MENU_REGEX), cancel_wizard)],
         conversation_timeout=300
