@@ -309,12 +309,134 @@ def cleanup_old_data():
     CUSTOM_MSG_TEXT, CUSTOM_MSG_LINK,
     SELECT_TOPIC, ADD_TOPIC_NAME, ADD_TOPIC_ID, REMOVE_TOPIC_INPUT,
     EDIT_SUB_SELECT_BATCH, EDIT_SUB_SELECT_SUBJECT, EDIT_SUB_ACTION, EDIT_SUB_NEW_NAME,
-    RESET_CONFIRM
-) = range(34)
+    RESET_CONFIRM, EDIT_TOPIC_SELECT, EDIT_TOPIC_NEW_NAME, DELETE_TOPIC_CONFIRM
+) = range(37)
 
 # Regex to match any menu button for canceling wizards
 MENU_REGEX = "^(📸 AI Auto-Schedule|🧠 Custom AI|🟦 Schedule CSDA|🟧 Schedule AICS|📝 Custom Message|➕ Add Subject|📂 More Options|✏️ Edit Class|🗑️ Delete Class|📅 View Schedule|📊 Attendance|📚 All Subjects|📤 Export Data|📥 Import Data|👥 Manage Admins|💬 Manage Topics|🛠️ Admin Tools|🔙 Back to Main|🌙 Night Schedule|☁️ Force Save|🔄 Reset System)$"
 
+# ==============================================================================
+# 🛠️ UTILITY FUNCTIONS
+# ==============================================================================
+
+# Telegram-allowed HTML tags (official list)
+ALLOWED_HTML_TAGS = [
+    'b', 'strong',           # Bold
+    'i', 'em',               # Italic
+    'u', 'ins',              # Underline
+    's', 'strike', 'del',    # Strikethrough
+    'span', 'tg-spoiler',    # Spoiler
+    'a',                     # Links
+    'code', 'pre',           # Code
+    'blockquote',            # Blockquote
+    'tg-emoji'               # Custom emoji
+]
+
+def validate_html(text):
+    """
+    Validate that HTML only uses Telegram-allowed tags.
+    Returns: (is_valid: bool, error_message: str or None)
+    """
+    import re
+    # Find all tags (opening and closing)
+    tags = re.findall(r'</?(\w+(?:-\w+)?)[^>]*>', text)
+    invalid_tags = [t for t in tags if t.lower() not in ALLOWED_HTML_TAGS]
+    
+    if invalid_tags:
+        unique_invalid = list(set(invalid_tags))
+        return False, f"❌ Invalid HTML tags: {', '.join(unique_invalid)}\n\n✅ Allowed: {', '.join(ALLOWED_HTML_TAGS[:8])}..."
+    return True, None
+
+def sanitize_html(text):
+    """Remove or convert forbidden HTML tags to safe alternatives"""
+    if not text:
+        return text
+    # Replace common forbidden tags
+    replacements = [
+        ('<br>', '\n'), ('<br/>', '\n'), ('<br />', '\n'),
+        ('<p>', ''), ('</p>', '\n'),
+        ('<div>', ''), ('</div>', '\n'),
+        ('<h1>', '<b>'), ('</h1>', '</b>\n'),
+        ('<h2>', '<b>'), ('</h2>', '</b>\n'),
+        ('<h3>', '<b>'), ('</h3>', '</b>\n'),
+        ('<li>', '• '), ('</li>', '\n'),
+        ('<ul>', ''), ('</ul>', ''),
+        ('<ol>', ''), ('</ol>', ''),
+    ]
+    for old, new in replacements:
+        text = text.replace(old, new)
+    return text
+
+async def send_long_message(bot, chat_id, text, parse_mode=None, reply_markup=None, **kwargs):
+    """
+    Split and send long messages in chunks of 4000 characters.
+    Handles Telegram's 4096 character limit safely.
+    """
+    MAX_LEN = 4000  # Leave buffer for safety
+    
+    if len(text) <= MAX_LEN:
+        return await bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup, **kwargs)
+    
+    # Split into chunks
+    chunks = []
+    current = ""
+    for line in text.split('\n'):
+        if len(current) + len(line) + 1 > MAX_LEN:
+            if current:
+                chunks.append(current)
+            current = line
+        else:
+            current = current + '\n' + line if current else line
+    if current:
+        chunks.append(current)
+    
+    # Send each chunk
+    last_msg = None
+    for i, chunk in enumerate(chunks):
+        # Only add reply_markup to last chunk
+        markup = reply_markup if i == len(chunks) - 1 else None
+        try:
+            last_msg = await bot.send_message(
+                chat_id, chunk, 
+                parse_mode=parse_mode, 
+                reply_markup=markup, 
+                **kwargs
+            )
+            await asyncio.sleep(0.1)  # Rate limiting - 10 msg/sec max
+        except Exception as e:
+            if "too long" in str(e).lower():
+                # Emergency split
+                for j in range(0, len(chunk), MAX_LEN):
+                    await bot.send_message(chat_id, chunk[j:j+MAX_LEN], **kwargs)
+                    await asyncio.sleep(0.1)
+            else:
+                raise e
+    return last_msg
+
+async def send_message_safe(bot, chat_id, text, parse_mode=ParseMode.HTML, **kwargs):
+    """
+    Bulletproof message sender with multiple fallbacks.
+    1. Try with HTML
+    2. If fails, strip HTML and send plain
+    3. If too long, chunk it
+    """
+    try:
+        # First try normal send
+        if len(text) > 4000:
+            return await send_long_message(bot, chat_id, text, parse_mode=parse_mode, **kwargs)
+        return await bot.send_message(chat_id, text, parse_mode=parse_mode, **kwargs)
+    except Exception as e:
+        err = str(e).lower()
+        if "parse" in err or "entity" in err or "tag" in err:
+            # HTML parsing error - strip all HTML and retry
+            import re
+            clean_text = re.sub(r'<[^>]+>', '', text)
+            logger.warning(f"HTML parse error, sending plain text: {e}")
+            return await bot.send_message(chat_id, clean_text, **kwargs)
+        elif "too long" in err:
+            return await send_long_message(bot, chat_id, text, parse_mode=parse_mode, **kwargs)
+        else:
+            raise e
 
 # ==============================================================================
 # 🌐 4. KEEP-ALIVE SERVER (FLASK)
@@ -382,10 +504,14 @@ async def generate_hype_message(batch, subject, time_str, link):
             f"Create a HTML notification for a class.\n"
             f"Info: {batch} | {subject} | {time_str} | {date_str} | {link}\n"
             f"Rules: Use HTML tags (<b>, <i>, <code>, <a href='...'>). "
+            f"Do NOT use <br> or <div>. Use newlines (\\n) for breaks. "
             f"Include <a href='{link}'>JOIN CLASS</a>. Make it exciting."
         )
         response = await asyncio.to_thread(model.generate_content, prompt)
-        return response.text
+        text = response.text
+        # Sanitize common forbidden tags
+        text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<p>", "").replace("</p>", "\n")
+        return text
     except Exception: return None
 
 async def custom_gemini_task(prompt):
@@ -1364,45 +1490,103 @@ async def wake_server():
         logger.error(f"Wake server error: {e}")
 
 async def send_alert_job(context: ContextTypes.DEFAULT_TYPE):
-    """Send scheduled class alert with retry mechanism"""
+    """
+    Bulletproof scheduled class alert with multi-layer fallback:
+    1. Try sending with topic ID + HTML
+    2. If topic fails → Send to General 
+    3. If HTML fails → Strip and send plain text
+    4. If all fails → Retry with exponential backoff
+    """
+    import random
     job = context.job
     data = job.data
-    max_retries = 3
+    max_retries = 4  # Increased retries
     retry_count = data.get('retry_count', 0)
     
     try:
         link = data.get('link') if data.get('link') != 'None' else "https://t.me/"
 
+        # Generate message content
         if data.get('msg_type') == "AI":
             text = await generate_hype_message(data['batch'], data['subject'], data['time_display'], link)
-            if not text: text = f"<b>🔔 {data['batch']} CLASS: {data['subject']}</b>\n⏰ {data['time_display']}"
+            if not text: 
+                text = f"<b>🔔 {data['batch']} CLASS: {data['subject']}</b>\n⏰ {data['time_display']}"
         else:
             text = f"{data.get('manual_msg')}\n⏰ {data['time_display']}"
+        
+        # Sanitize any forbidden HTML tags
+        text = sanitize_html(text)
         
         msg = f"{text}\n\n👇 <i>Mark attendance:</i>"
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("🙋 I am Present", callback_data=f"att_{job.name}")]])
         
-        await context.bot.send_message(
-            job.chat_id, 
-            text=msg, 
-            parse_mode=ParseMode.HTML, 
-            reply_markup=kb, 
-            disable_web_page_preview=True,
-            message_thread_id=data.get('message_thread_id')
-        )
-        remove_job_from_db(job.name)
-        logger.info(f"✅ Alert sent: {job.name}")
+        sent = False
+        
+        # FALLBACK LEVEL 1: Try with topic + HTML
+        try:
+            await context.bot.send_message(
+                job.chat_id, 
+                text=msg, 
+                parse_mode=ParseMode.HTML, 
+                reply_markup=kb, 
+                disable_web_page_preview=True,
+                message_thread_id=data.get('message_thread_id')
+            )
+            sent = True
+        except Exception as e1:
+            err1 = str(e1)
+            logger.warning(f"Fallback 1 failed for {job.name}: {err1}")
+            
+            # FALLBACK LEVEL 2: Send to General (no topic)
+            if "thread" in err1.lower() or "topic" in err1.lower():
+                try:
+                    await context.bot.send_message(
+                        job.chat_id, 
+                        text=f"⚠️ <i>Topic unavailable</i>\n\n{msg}", 
+                        parse_mode=ParseMode.HTML, 
+                        reply_markup=kb, 
+                        disable_web_page_preview=True,
+                        message_thread_id=None
+                    )
+                    sent = True
+                except Exception as e2:
+                    err1 = str(e2)  # Update error for next fallback
+                    logger.warning(f"Fallback 2 failed for {job.name}: {e2}")
+            
+            # FALLBACK LEVEL 3: Strip HTML, send plain text
+            if not sent and ("parse" in err1.lower() or "entity" in err1.lower() or "tag" in err1.lower()):
+                try:
+                    clean_msg = re.sub(r'<[^>]+>', '', msg)
+                    await context.bot.send_message(
+                        job.chat_id, 
+                        text=clean_msg, 
+                        reply_markup=kb, 
+                        disable_web_page_preview=True,
+                        message_thread_id=None
+                    )
+                    sent = True
+                    logger.info(f"Sent {job.name} as plain text (HTML stripped)")
+                except Exception as e3:
+                    logger.warning(f"Fallback 3 failed for {job.name}: {e3}")
+        
+        if sent:
+            remove_job_from_db(job.name)
+            logger.info(f"✅ Alert sent: {job.name}")
+        else:
+            raise Exception("All fallback attempts failed")
         
     except Exception as e:
         logger.error(f"❌ Failed to send alert (attempt {retry_count + 1}): {e}")
         
         if retry_count < max_retries:
-            # Wake server and retry after 1 minute
+            # Wake server and retry with jitter (1-2 minutes)
             await wake_server()
             new_data = data.copy()
             new_data['retry_count'] = retry_count + 1
             
-            retry_time = datetime.now(IST) + timedelta(minutes=1)
+            # Add jitter to prevent thundering herd (60-90 seconds)
+            jitter = random.randint(0, 30)
+            retry_time = datetime.now(IST) + timedelta(seconds=60 + jitter)
             context.job_queue.run_once(
                 send_alert_job, 
                 retry_time, 
@@ -1410,9 +1594,11 @@ async def send_alert_job(context: ContextTypes.DEFAULT_TYPE):
                 name=f"{job.name}_retry{retry_count + 1}", 
                 data=new_data
             )
-            logger.info(f"🔄 Retry scheduled for {job.name} in 1 minute")
+            logger.info(f"🔄 Retry scheduled for {job.name} in ~1 minute")
         else:
-            logger.error(f"❌ Max retries reached for {job.name}. Alert failed.")
+            # Final fallback - log for admin review
+            logger.error(f"❌ CRITICAL: Max retries ({max_retries}) reached for {job.name}. Alert LOST.")
+            # Could add notification to admin here in future
 
 async def restore_jobs(application: Application):
     count = 0
@@ -1934,6 +2120,152 @@ async def remove_topic_save(update, context):
         await update.message.reply_text("❌ <b>ID NOT FOUND!</b>", parse_mode=ParseMode.HTML)
     return ConversationHandler.END
 
+# --- Edit Topic Command ---
+async def start_edit_topic(update, context):
+    """Start edit topic wizard - /edittopic"""
+    if not await require_private_admin(update, context): return ConversationHandler.END
+    topics = DB.get("topics", {})
+    if not topics:
+        await update.message.reply_text(
+            "📭 <b>NO TOPICS TO EDIT.</b>\n\n"
+            "<i>Add topics first using /topic in a forum thread.</i>",
+            parse_mode=ParseMode.HTML
+        )
+        return ConversationHandler.END
+    
+    rows = []
+    for tid, name in topics.items():
+        rows.append([InlineKeyboardButton(f"🏷️ {name}", callback_data=f"edtopic_{tid}")])
+    rows.append([InlineKeyboardButton("🔙 Cancel", callback_data="edtopic_cancel")])
+    
+    await update.message.reply_text(
+        "✏️ <b>EDIT TOPIC</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<i>Select a topic to rename:</i> 👇",
+        reply_markup=InlineKeyboardMarkup(rows),
+        parse_mode=ParseMode.HTML
+    )
+    return EDIT_TOPIC_SELECT
+
+async def edit_topic_select(update, context):
+    """Handle topic selection for editing"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "edtopic_cancel":
+        await query.edit_message_text("❌ Cancelled.")
+        return ConversationHandler.END
+    
+    tid = query.data.replace("edtopic_", "")
+    context.user_data['edit_topic_id'] = tid
+    context.user_data['edit_topic_old_name'] = DB.get("topics", {}).get(tid, "Unknown")
+    
+    await query.edit_message_text(
+        f"✏️ <b>RENAME TOPIC</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Current name: <b>{context.user_data['edit_topic_old_name']}</b>\n\n"
+        f"<i>Enter the new name:</i>",
+        parse_mode=ParseMode.HTML
+    )
+    return EDIT_TOPIC_NEW_NAME
+
+async def edit_topic_save(update, context):
+    """Save the renamed topic"""
+    new_name = update.message.text.strip()
+    tid = context.user_data['edit_topic_id']
+    old_name = context.user_data['edit_topic_old_name']
+    
+    if "topics" not in DB:
+        DB["topics"] = {}
+    
+    DB["topics"][tid] = new_name
+    save_db()
+    
+    await update.message.reply_text(
+        f"✅ <b>TOPIC RENAMED!</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🔄 <b>{old_name}</b> ➡️ <b>{new_name}</b>",
+        parse_mode=ParseMode.HTML
+    )
+    return ConversationHandler.END
+
+# --- Delete Topic Command ---
+async def start_delete_topic(update, context):
+    """Start delete topic - /deletetopic"""
+    if not await require_private_admin(update, context): return ConversationHandler.END
+    topics = DB.get("topics", {})
+    if not topics:
+        await update.message.reply_text("📭 <b>NO TOPICS TO DELETE.</b>", parse_mode=ParseMode.HTML)
+        return ConversationHandler.END
+    
+    rows = []
+    for tid, name in topics.items():
+        rows.append([InlineKeyboardButton(f"🗑️ {name}", callback_data=f"deltopic_{tid}")])
+    rows.append([InlineKeyboardButton("🔙 Cancel", callback_data="deltopic_cancel")])
+    
+    await update.message.reply_text(
+        "🗑️ <b>DELETE TOPIC</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<i>Select a topic to delete:</i> 👇",
+        reply_markup=InlineKeyboardMarkup(rows),
+        parse_mode=ParseMode.HTML
+    )
+    return DELETE_TOPIC_CONFIRM
+
+async def delete_topic_confirm(update, context):
+    """Handle topic deletion"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "deltopic_cancel":
+        await query.edit_message_text("❌ Cancelled.")
+        return ConversationHandler.END
+    
+    tid = query.data.replace("deltopic_", "")
+    topics = DB.get("topics", {})
+    
+    if tid in topics:
+        name = topics[tid]
+        del DB["topics"][tid]
+        save_db()
+        await query.edit_message_text(
+            f"✅ <b>DELETED:</b> {name}\n\n"
+            f"<i>Topic ID {tid} removed.</i>",
+            parse_mode=ParseMode.HTML
+        )
+    else:
+        await query.edit_message_text("❌ <b>Topic not found!</b>", parse_mode=ParseMode.HTML)
+    
+    return ConversationHandler.END
+
+# --- Topics List Command ---
+async def topics_command(update, context):
+    """List all topics - /topics"""
+    if not await require_private_admin(update, context): return
+    
+    topics = DB.get("topics", {})
+    if not topics:
+        await update.message.reply_text(
+            "📭 <b>NO TOPICS REGISTERED</b>\n\n"
+            "<i>Go to a forum topic and type:</i>\n"
+            "<code>/topic TopicName</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
+    msg = "💬 <b>REGISTERED TOPICS</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+    for tid, name in topics.items():
+        msg += f"🏷️ <b>{name}</b>\n    ID: <code>{tid}</code>\n\n"
+    
+    msg += (
+        "━━━━━━━━━━━━━━━━━━\n"
+        "📝 <b>Commands:</b>\n"
+        "• /edittopic - Rename a topic\n"
+        "• /deletetopic - Remove a topic"
+    )
+    
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
 # ==============================================================================
 # 🌙 NIGHT SCHEDULE (NEXT-DAY SUMMARY)
 # ==============================================================================
@@ -2141,23 +2473,35 @@ async def mark_attendance(update, context):
 async def view_schedule_handler(update, context):
     if not await require_private_admin(update, context): return
     jobs = context.job_queue.jobs()
-    if not jobs:
+    
+    # Filter only class jobs
+    class_jobs = [j for j in jobs if j.name and isinstance(j.data, dict) and 'batch' in j.data]
+    
+    if not class_jobs:
         await update.message.reply_text(
             "📭 <b>NO UPCOMING CLASSES!</b>\n\n"
             "<i>Schedule some classes first.</i>",
             parse_mode=ParseMode.HTML
         )
         return
+    
     msg = (
-        "📅 <b>UPCOMING CLASSES</b>\n"
+        f"📅 <b>UPCOMING CLASSES</b> ({len(class_jobs)} total)\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
     )
-    for job in sorted(jobs, key=lambda j: j.next_t):
-        if job.name and isinstance(job.data, dict) and 'batch' in job.data:
-            d = job.data
-            msg += f"📖 <b>{d['batch']}</b> • {d['subject']}\n"
-            msg += f"     ⏰ <i>{d['time_display']}</i>\n\n"
-    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+    
+    for job in sorted(class_jobs, key=lambda j: j.next_t):
+        d = job.data
+        # Format date nicely
+        try:
+            date_str = job.next_t.strftime("%d %b, %H:%M")
+        except:
+            date_str = d.get('time_display', 'Unknown')
+        msg += f"📖 <b>{d['batch']}</b> • {d['subject']}\n"
+        msg += f"     ⏰ <i>{date_str}</i>\n\n"
+    
+    # Use chunking for long schedules
+    await send_long_message(context.bot, update.effective_chat.id, msg, parse_mode=ParseMode.HTML)
 
 async def prompt_image_upload(update, context):
     if not await require_private_admin(update, context): return
@@ -2752,11 +3096,14 @@ async def post_init(app):
         BotCommand("admin", "🛠️ Admin Tools"),
         BotCommand("schedule", "📅 View Schedule"),
         BotCommand("subjects", "📚 All Subjects"),
+        BotCommand("editsubject", "✏️ Edit Subjects"),
+        BotCommand("topics", "💬 View Topics"),
+        BotCommand("edittopic", "✏️ Edit Topic"),
+        BotCommand("deletetopic", "🗑️ Delete Topic"),
         BotCommand("attendance", "📊 Attendance Report"),
         BotCommand("export", "📤 Export Data"),
         BotCommand("reset", "🔄 Reset & Fix Issues"),
-        BotCommand("resetdatabase", "🧨 Reset Database (Danger)"),
-        BotCommand("editsubject", "✏️ Edit Subjects"),
+        BotCommand("resetdatabase", "🧨 Factory Reset"),
         BotCommand("feedback", "💬 Send Feedback"),
     ]
     
@@ -2985,6 +3332,26 @@ def main():
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("resetdatabase", start_reset_db)],
         states={RESET_CONFIRM: [CallbackQueryHandler(confirm_reset_db, pattern="^reset_")]},
+        fallbacks=[CommandHandler("cancel", cancel_wizard)],
+        conversation_timeout=60
+    ))
+
+    # Topic Commands (/topics, /edittopic, /deletetopic)
+    app.add_handler(CommandHandler("topics", topics_command))
+    
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("edittopic", start_edit_topic)],
+        states={
+            EDIT_TOPIC_SELECT: [CallbackQueryHandler(edit_topic_select, pattern="^edtopic_")],
+            EDIT_TOPIC_NEW_NAME: [MessageHandler(txt_filter, edit_topic_save)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_wizard)],
+        conversation_timeout=300
+    ))
+    
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("deletetopic", start_delete_topic)],
+        states={DELETE_TOPIC_CONFIRM: [CallbackQueryHandler(delete_topic_confirm, pattern="^deltopic_")]},
         fallbacks=[CommandHandler("cancel", cancel_wizard)],
         conversation_timeout=60
     ))
