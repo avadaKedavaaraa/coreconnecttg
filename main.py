@@ -849,23 +849,38 @@ async def view_admins(update, context):
         await update.message.reply_text("❌ An error occurred.")
 
 async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Track when bot is added to groups - only update if no group linked"""
     result = update.my_chat_member.new_chat_member
     chat = update.effective_chat
     
     if result.status in [ChatMember.MEMBER, ChatMember.ADMINISTRATOR]:
-        DB["config"]["group_id"] = chat.id
-        DB["config"]["group_name"] = chat.title
-        save_db()
-        logger.info(f"🆕 LINKED GROUP: {chat.title} ({chat.id})")
+        # Only update group if no group is currently linked
+        current_group = DB.get("config", {}).get("group_id")
         
-        await context.bot.send_message(
-            chat_id=chat.id,
-            text=f"🤖 <b>VASUKI SYSTEM ONLINE</b>\n"
-                 f"✅ Connected: <b>{chat.title}</b>\n"
-                 f"🕒 Timezone: IST (GMT+5:30)\n"
-                 f"🚀 <b>Ready to schedule classes.</b>",
-            parse_mode=ParseMode.HTML
-        )
+        if current_group is None:
+            # No group linked - set this one
+            DB["config"]["group_id"] = chat.id
+            DB["config"]["group_name"] = chat.title
+            save_db()
+            logger.info(f"🆕 LINKED GROUP: {chat.title} ({chat.id})")
+            
+            await context.bot.send_message(
+                chat_id=chat.id,
+                text=f"🤖 <b>VASUKI SYSTEM ONLINE</b>\n"
+                     f"✅ Connected: <b>{chat.title}</b>\n"
+                     f"🕒 Timezone: IST (GMT+5:30)\n"
+                     f"🚀 <b>Ready to schedule classes.</b>",
+                parse_mode=ParseMode.HTML
+            )
+        elif current_group == chat.id:
+            # Same group - update name if changed
+            if DB["config"]["group_name"] != chat.title:
+                DB["config"]["group_name"] = chat.title
+                save_db()
+                logger.info(f"📝 Updated group name: {chat.title}")
+        else:
+            # Different group - log but don't overwrite
+            logger.info(f"ℹ️ Bot added to {chat.title} but already linked to {DB['config']['group_name']}")
 
 # ==============================================================================
 # 🏠 8. CORE HANDLERS
