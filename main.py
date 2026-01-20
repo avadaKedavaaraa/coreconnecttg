@@ -355,12 +355,12 @@ def cleanup_old_data():
     EDIT_SELECT_JOB, EDIT_CHOOSE_FIELD, EDIT_NEW_VALUE, ADD_ADMIN_INPUT,
     REMOVE_ADMIN_INPUT, CUSTOM_OFFSET_INPUT, NIGHT_SCHEDULE_TIME,
     CUSTOM_MSG_BATCH, CUSTOM_MSG_TIME, CUSTOM_MSG_START, CUSTOM_MSG_END,
-    CUSTOM_MSG_TEXT, CUSTOM_MSG_LINK,
+    CUSTOM_MSG_TEXT, CUSTOM_MSG_LINK, CUSTOM_MSG_DAYS,
     SELECT_TOPIC, ADD_TOPIC_NAME, ADD_TOPIC_ID, REMOVE_TOPIC_INPUT,
     EDIT_SUB_SELECT_BATCH, EDIT_SUB_SELECT_SUBJECT, EDIT_SUB_ACTION, EDIT_SUB_NEW_NAME,
     RESET_CONFIRM, EDIT_TOPIC_SELECT, EDIT_TOPIC_NEW_NAME, DELETE_TOPIC_CONFIRM,
     EDIT_SELECT_SCOPE, EDIT_BULK_DAYS
-) = range(39)
+) = range(40)
 
 # Regex to match any menu button for canceling wizards
 MENU_REGEX = "^(📸 AI Auto-Schedule|🧠 Custom AI|🟦 Schedule CSDA|🟧 Schedule AICS|📝 Custom Message|➕ Add Subject|📂 More Options|✏️ Edit Class|🗑️ Delete Class|📅 View Schedule|📊 Attendance|📚 All Subjects|📤 Export Data|📥 Import Data|👥 Manage Admins|💬 Manage Topics|🛠️ Admin Tools|🔙 Back to Main|🌙 Night Schedule|☁️ Force Save|🔄 Reset System)$"
@@ -2032,21 +2032,56 @@ async def cmsg_batch_selected(update, context):
         query = update.callback_query
         await query.answer()
         context.user_data['cmsg_batch'] = query.data.replace("cmsg_", "")
+        context.user_data['cmsg_days'] = []  # Initialize empty days list
         
         await query.edit_message_text(
-            "⏰ <b>SCHEDULE TIME</b>\n"
+            "📅 <b>SELECT DAYS</b>\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "<i>Enter time in 24h format:</i>\n"
-            "<code>HH:MM</code> (e.g., <code>14:30</code>)",
+            "<i>Tap to toggle days, then hit</i> <b>DONE</b> 🚀",
+            reply_markup=days_keyboard([]),
             parse_mode=ParseMode.HTML
         )
-        return CUSTOM_MSG_TIME
+        return CUSTOM_MSG_DAYS
     except Exception as e:
         logger.error(f"Error in cmsg_batch_selected: {e}")
         return ConversationHandler.END
 
+async def cmsg_toggle_days(update, context):
+    """Handle day toggling for custom message"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "days_done":
+        if not context.user_data.get('cmsg_days'): 
+            await query.answer("⚠️ Please select at least one day!", show_alert=True)
+            return CUSTOM_MSG_DAYS
+            
+        await query.edit_message_text(
+            "📅 <b>START DATE</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "<i>Enter in format:</i> <code>DD-MM-YYYY</code>\n"
+            "<i>Or type:</i> <code>Today</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return CUSTOM_MSG_START
+    
+    # Toggle individual day
+    if query.data.startswith("toggle_"):
+        day = query.data.split("_")[1]
+        days = context.user_data.get('cmsg_days', [])
+        
+        if day in days: 
+            days.remove(day)
+        else: 
+            days.append(day)
+            
+        context.user_data['cmsg_days'] = days
+        await query.edit_message_reply_markup(days_keyboard(days))
+        
+    return CUSTOM_MSG_DAYS
+
 async def cmsg_time_input(update, context):
-    """Handle time input"""
+    """Handle time input (Moved to after End Date)"""
     try:
         text = update.message.text.strip()
         try:
@@ -2063,13 +2098,15 @@ async def cmsg_time_input(update, context):
             return CUSTOM_MSG_TIME
         
         await update.message.reply_text(
-            "📅 <b>START DATE</b>\n"
+            "✍️ <b>MESSAGE CONTENT</b>\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "<i>Enter in format:</i> <code>DD-MM-YYYY</code>\n"
-            "<i>Or type:</i> <code>Today</code>",
+            "<i>Type your announcement message:</i>\n\n"
+            "💡 <b>Tip:</b> You can use HTML:\n"
+            "<code>&lt;b&gt;bold&lt;/b&gt;</code>, <code>&lt;i&gt;italic&lt;/i&gt;</code>\n"
+            "<code>&lt;a href='url'&gt;link&lt;/a&gt;</code>",
             parse_mode=ParseMode.HTML
         )
-        return CUSTOM_MSG_START
+        return CUSTOM_MSG_TEXT
     except Exception as e:
         logger.error(f"Error in cmsg_time_input: {e}")
         return ConversationHandler.END
@@ -2104,7 +2141,6 @@ async def cmsg_start_date(update, context):
         logger.error(f"Error in cmsg_start_date: {e}")
         return ConversationHandler.END
 
-async def cmsg_end_date(update, context):
     """Handle end date input"""
     try:
         text = update.message.text.strip().lower()
@@ -2123,15 +2159,13 @@ async def cmsg_end_date(update, context):
                 return CUSTOM_MSG_END
         
         await update.message.reply_text(
-            "✍️ <b>MESSAGE CONTENT</b>\n"
+            "⏰ <b>SCHEDULE TIME</b>\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "<i>Type your announcement message:</i>\n\n"
-            "💡 <b>Tip:</b> You can use HTML:\n"
-            "<code>&lt;b&gt;bold&lt;/b&gt;</code>, <code>&lt;i&gt;italic&lt;/i&gt;</code>\n"
-            "<code>&lt;a href='url'&gt;link&lt;/a&gt;</code>",
+            "<i>Enter time in 24h format:</i>\n"
+            "<code>HH:MM</code> (e.g., <code>14:30</code>)",
             parse_mode=ParseMode.HTML
         )
-        return CUSTOM_MSG_TEXT
+        return CUSTOM_MSG_TIME
     except Exception as e:
         logger.error(f"Error in cmsg_end_date: {e}")
         return ConversationHandler.END
@@ -2230,14 +2264,31 @@ async def cmsg_finalize(update, context):
         gid = DB["config"]["group_id"]
         
         # Determine days to schedule
+        # Determine days to schedule
+        selected_days = d.get('cmsg_days', [])
+        day_map = {"Mon": 0, "Tue": 1, "Wed": 2, "Thu": 3, "Fri": 4, "Sat": 5, "Sun": 6}
+        target_weekdays = [day_map[day] for day in selected_days]
+        days = []
+
         if end_dt:
-            days = []
             current = start_dt
             while current <= end_dt:
-                days.append(current)
+                if current.weekday() in target_weekdays:
+                    days.append(current)
                 current += timedelta(days=1)
         else:
-            days = [start_dt]
+            # If no end date, find the next occurrence for EACH selected day
+            for target_wd in target_weekdays:
+                current = start_dt
+                # Calculate days until next target weekday
+                days_ahead = target_wd - current.weekday()
+                if days_ahead < 0:
+                    days_ahead += 7
+                next_date = current + timedelta(days=days_ahead)
+                days.append(next_date)
+            
+            # Sort days just in case
+            days.sort()
         
         count = 0
         for day in days:
@@ -3824,6 +3875,7 @@ def main():
         entry_points=[MessageHandler(filters.Regex("^📝 Custom Message"), start_custom_msg)],
         states={
             CUSTOM_MSG_BATCH: [CallbackQueryHandler(cmsg_batch_selected, pattern="^cmsg_")],
+            CUSTOM_MSG_DAYS: [CallbackQueryHandler(cmsg_toggle_days, pattern="^toggle_|^days_done")],
             CUSTOM_MSG_TIME: [MessageHandler(txt_filter, cmsg_time_input)],
             CUSTOM_MSG_START: [MessageHandler(txt_filter, cmsg_start_date)],
             CUSTOM_MSG_END: [MessageHandler(txt_filter, cmsg_end_date)],
