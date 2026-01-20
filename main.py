@@ -885,58 +885,197 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 # ==============================================================================
 # 🏠 8. CORE HANDLERS
 # ==============================================================================
+
+async def verify_topic_connectivity(bot, group_id, topic_id):
+    """
+    Verify topic is functional by sending and immediately deleting a test message.
+    Returns: (success: bool, error_message: str or None)
+    """
+    if not group_id or not topic_id:
+        return False, "No group or topic configured"
+    
+    try:
+        # Send silent test message
+        msg = await bot.send_message(
+            chat_id=group_id,
+            text="🔄 Topic verification...",
+            message_thread_id=int(topic_id),
+            disable_notification=True
+        )
+        # Immediately delete
+        await msg.delete()
+        return True, None
+    except Exception as e:
+        error = str(e).lower()
+        if "thread" in error or "topic" in error:
+            return False, "Topic not found or closed"
+        elif "chat not found" in error:
+            return False, "Group not accessible"
+        else:
+            return False, str(e)[:50]
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat_type = update.effective_chat.type
 
-    # Strict Access Control
+    # Strict Access Control - non-admins get nothing
     if not is_admin(user.username):
         await update.message.reply_text(
             f"⛔ <b>ACCESS DENIED</b>\n\n"
-            f"<i>You are not authorized to control The Bot. Go otherwise you will be wanded crucio</i>\n\n"
+            f"<i>You are not authorized to control The Bot.</i>\n\n"
             f"🔐 <b>Grant Access:</b> Contact @AvadaKedavaaraa",
             parse_mode=ParseMode.HTML
         )
         return
 
+    # GROUP/SUPERGROUP: Link and auto-delete message
     if chat_type in ['group', 'supergroup']:
         DB["config"]["group_id"] = update.effective_chat.id
         DB["config"]["group_name"] = update.effective_chat.title
         save_db()
         try:
-            await update.message.reply_text(
+            msg = await update.message.reply_text(
                 f"🚀 <b>VASUKI ACTIVATED!</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"✅ <i>Successfully linked to:</i>\n"
                 f"📍 <b>{update.effective_chat.title}</b>\n\n"
-                f"💡 <i>Use /start in DM for full control!</i>",
-                parse_mode=ParseMode.HTML
+                f"💡 <i>Use /start in DM for full control!</i>\n\n"
+                f"<i>This message will auto-delete in 5 seconds...</i>",
+                parse_mode=ParseMode.HTML,
+                disable_notification=True  # Silent
             )
+            # Schedule auto-delete after 5 seconds
+            await asyncio.sleep(5)
+            try:
+                await msg.delete()
+            except:
+                pass
         except Exception as e:
             logger.error(f"Failed to reply in group start: {e}")
         return
 
-    grp_name = DB["config"]["group_name"]
-    grp_id = DB["config"]["group_id"]
-    status_icon = "🟢" if grp_id else "🔴"
-
+    # PRIVATE CHAT: Show dashboard with topic verification
+    grp_name = DB.get("config", {}).get("group_name", "❌ No Group Linked")
+    grp_id = DB.get("config", {}).get("group_id")
+    topics = DB.get("topics", {})
+    
+    # Verify group and topic connectivity
+    group_status = "🟢" if grp_id else "🔴"
+    topic_status = "🔴 None"
+    topic_count = len(topics)
+    
+    if grp_id and topics:
+        # Test first topic
+        first_topic_id = list(topics.keys())[0]
+        first_topic_name = topics[first_topic_id]
+        success, error = await verify_topic_connectivity(context.bot, grp_id, first_topic_id)
+        
+        if success:
+            topic_status = f"🟢 {topic_count} connected"
+        else:
+            topic_status = f"🟡 {topic_count} (verify needed)"
+    elif topics:
+        topic_status = f"🟡 {topic_count} (no group)"
+    
+    # Build keyboard with verify option
+    kb = []
+    if grp_id and topics:
+        kb.append([InlineKeyboardButton("🔄 Verify Topics", callback_data="verify_topics")])
+    
     try:
         await update.message.reply_text(
             f"⚡ <b>VASUKI COMMAND CENTER</b> ⚡\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"👋 <i>Welcome back,</i> <b>{user.first_name}!</b>\n\n"
             f"🔌 <b>CONNECTION STATUS</b>\n"
-            f"┣ 🎯 <b>Target:</b> {status_icon} {grp_name}\n"
+            f"┣ 🎯 <b>Target:</b> {group_status} {grp_name}\n"
+            f"┣ 💬 <b>Topics:</b> {topic_status}\n"
             f"┣ ⏰ <b>Time:</b> {datetime.now(IST).strftime('%H:%M IST')}\n"
-            f"┣ 📅 <b>Scheduled:</b> {len(DB['active_jobs'])} classes\n"
+            f"┣ 📅 <b>Scheduled:</b> {len(DB.get('active_jobs', []))} classes\n"
             f"┗ 💾 <b>Storage:</b> {'☁️ Supabase' if supabase else '💻 Local'}\n\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"<i>Select an option below to begin!</i> 👇",
             parse_mode=ParseMode.HTML,
-            reply_markup=get_main_keyboard()
+            reply_markup=InlineKeyboardMarkup(kb) if kb else get_main_keyboard()
         )
+        # Also show main keyboard
+        if kb:
+            await update.message.reply_text("📱 <b>Main Menu</b>", parse_mode=ParseMode.HTML, reply_markup=get_main_keyboard())
     except Exception as e:
         logger.error(f"Failed to send dashboard: {e}")
+
+async def verify_topics_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Verify all topics and show results"""
+    query = update.callback_query
+    await query.answer("Verifying topics...")
+    
+    grp_id = DB.get("config", {}).get("group_id")
+    topics = DB.get("topics", {})
+    
+    if not grp_id:
+        await query.edit_message_text("❌ <b>No group linked!</b>\n\nUse /start in a group first.", parse_mode=ParseMode.HTML)
+        return
+    
+    if not topics:
+        await query.edit_message_text("❌ <b>No topics registered!</b>\n\nGo to a topic and use /topic TopicName", parse_mode=ParseMode.HTML)
+        return
+    
+    results = []
+    success_count = 0
+    
+    for tid, name in topics.items():
+        success, error = await verify_topic_connectivity(context.bot, grp_id, tid)
+        if success:
+            results.append(f"✅ <b>{name}</b> (ID: {tid})")
+            success_count += 1
+        else:
+            results.append(f"❌ <b>{name}</b> - {error}")
+    
+    msg = (
+        f"🔍 <b>TOPIC VERIFICATION</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📊 <b>{success_count}/{len(topics)}</b> topics functional\n\n"
+        + "\n".join(results)
+    )
+    
+    await query.edit_message_text(msg, parse_mode=ParseMode.HTML)
+
+async def verify_topics_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command handler for /verifytopics"""
+    if not await require_private_admin(update, context): return
+    
+    grp_id = DB.get("config", {}).get("group_id")
+    topics = DB.get("topics", {})
+    
+    if not grp_id:
+        await update.message.reply_text("❌ <b>No group linked!</b>\n\nUse /start in a group first.", parse_mode=ParseMode.HTML)
+        return
+    
+    if not topics:
+        await update.message.reply_text("❌ <b>No topics registered!</b>\n\nGo to a topic and use /topic TopicName", parse_mode=ParseMode.HTML)
+        return
+    
+    msg = await update.message.reply_text("🔄 <b>Verifying topics...</b>", parse_mode=ParseMode.HTML)
+    
+    results = []
+    success_count = 0
+    
+    for tid, name in topics.items():
+        success, error = await verify_topic_connectivity(context.bot, grp_id, tid)
+        if success:
+            results.append(f"✅ <b>{name}</b> (ID: {tid})")
+            success_count += 1
+        else:
+            results.append(f"❌ <b>{name}</b> - {error}")
+    
+    result_msg = (
+        f"🔍 <b>TOPIC VERIFICATION</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📊 <b>{success_count}/{len(topics)}</b> topics functional\n\n"
+        + "\n".join(results)
+    )
+    
+    await msg.edit_text(result_msg, parse_mode=ParseMode.HTML)
 
 async def handle_navigation(update, context):
     try:
@@ -3515,6 +3654,8 @@ def main():
     app.add_handler(CommandHandler("subjects", subjects_command))
     app.add_handler(CommandHandler("attendance", attendance_command))
     app.add_handler(CommandHandler("topic", register_topic_command))  # New topic command
+    app.add_handler(CommandHandler("verifytopics", verify_topics_command))  # Verify topics
+    app.add_handler(CallbackQueryHandler(verify_topics_callback, pattern="^verify_topics$"))
     app.add_handler(ChatMemberHandler(track_chats, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.StatusUpdate.FORUM_TOPIC_CREATED, auto_register_topic)) # Auto-register
     
