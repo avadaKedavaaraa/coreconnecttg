@@ -1114,8 +1114,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Failed to send dashboard: {e}")
 
-    await query.edit_message_text(msg, parse_mode=ParseMode.HTML)
-
 # Pagination constant
 TOPICS_PER_PAGE = 10
 
