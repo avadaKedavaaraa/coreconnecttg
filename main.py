@@ -1878,25 +1878,7 @@ async def edit_scope_handler(update, context):
 # ==============================================================================
 # 📨 11. JOB EXECUTION
 # ==============================================================================
-async def wake_server():
-    """Ping our own server to wake up Render if it's sleeping"""
-    try:
-        import httpx
-        port = int(os.environ.get("PORT", 8080))
-        urls = [
-            f"http://localhost:{port}/",
-            os.environ.get("RENDER_EXTERNAL_URL", "")
-        ]
-        async with httpx.AsyncClient(timeout=10) as client:
-            for url in urls:
-                if url:
-                    try:
-                        await client.get(url)
-                        logger.info(f"🔔 Server wake request sent to {url}")
-                    except:
-                        pass
-    except Exception as e:
-        logger.error(f"Wake server error: {e}")
+
 
 async def send_alert_job(context: ContextTypes.DEFAULT_TYPE):
     """
@@ -3822,23 +3804,30 @@ async def post_init(app):
     
     app.job_queue.run_repeating(scheduled_cleanup, interval=86400, first=86400)
     
-    # Schedule Smart Keep-Alive (Ping every 14 mins, SLEEP 01:00-07:00 IST)
+    # Schedule Smart Keep-Alive (Ping every 5 mins, NO SLEEP)
     async def smart_ping(context):
-        now = datetime.now(IST)
-        # Sleep between 01:00 and 07:00
-        if 1 <= now.hour < 7:
-            return
-        
         try:
+            import httpx
             port = int(os.environ.get("PORT", 8080))
-            # Ping localhost to reset Render's inactivity timer
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=10) as response:
-                pass
-        except Exception as e:
-            logger.warning(f"⚠️ Keep-alive ping failed: {e}")
+            urls = [
+                f"http://127.0.0.1:{port}/",
+                os.environ.get("RENDER_EXTERNAL_URL")
+            ]
+            
+            async with httpx.AsyncClient(timeout=10) as client:
+                for url in urls:
+                    if url:
+                        try:
+                            await client.get(url)
+                            logger.info(f"🔔 Ping sent to {url}")
+                        except Exception as inner_e:
+                            logger.warning(f"⚠️ Ping failed for {url}: {inner_e}")
 
-    # 14 minutes = 840 seconds (Render timeout is 15 mins)
-    app.job_queue.run_repeating(smart_ping, interval=840, first=60)
+        except Exception as e:
+            logger.warning(f"⚠️ Keep-alive mechanism error: {e}")
+
+    # 5 minutes = 300 seconds (Aggressive keep-alive for Render)
+    app.job_queue.run_repeating(smart_ping, interval=300, first=60)
 
     logger.info("✅ Vasuki Bot initialized successfully")
 
