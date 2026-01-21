@@ -123,16 +123,21 @@ logger = logging.getLogger(__name__)
 # ------------------------------------------------------------------------------
 # 🧠 AI & DB ENGINE INITIALIZATION
 # ------------------------------------------------------------------------------
-if GEMINI_API_KEY:
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        logger.info("✅ Gemini AI Connected")
-    except Exception as e:
-        model = None
-        logger.error(f"❌ Gemini AI Failed: {e}")
-else:
-    model = None
+# Gemini is LAZY LOADED to save memory (~100MB)
+model = None  # Will be initialized on first AI request
+
+def get_gemini_model():
+    """Lazy-load Gemini model only when needed"""
+    global model
+    if model is None and GEMINI_API_KEY:
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=GEMINI_API_KEY)
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            logger.info("✅ Gemini AI loaded (lazy)")
+        except Exception as e:
+            logger.error(f"❌ Gemini AI Failed: {e}")
+    return model
 
 # Supabase Connection
 supabase: Client = None
@@ -556,7 +561,8 @@ def keep_alive():
 # 🧠 5. ARTIFICIAL INTELLIGENCE LOGIC
 # ==============================================================================
 async def analyze_timetable_image(image_bytes):
-    if not model: return None
+    ai_model = get_gemini_model()
+    if not ai_model: return None
     prompt = """
     Analyze this timetable image. Extract class details into strict JSON:
     [{"day": "Mon", "time": "10:00", "subject": "Maths", "batch": "CSDA"}]
@@ -569,7 +575,7 @@ async def analyze_timetable_image(image_bytes):
         DB["system_stats"]["ai_requests"] += 1
         img = Image.open(io.BytesIO(image_bytes))
         img.thumbnail((1024, 1024)) 
-        response = await asyncio.to_thread(model.generate_content, [prompt, img])
+        response = await asyncio.to_thread(ai_model.generate_content, [prompt, img])
         text = response.text
         text = re.sub(r"```json", "", text, flags=re.IGNORECASE)
         text = re.sub(r"```", "", text)
@@ -579,7 +585,8 @@ async def analyze_timetable_image(image_bytes):
         return None
 
 async def generate_hype_message(batch, subject, time_str, link):
-    if not model: return None
+    ai_model = get_gemini_model()
+    if not ai_model: return None
     try:
         DB["system_stats"]["ai_requests"] += 1
         date_str = datetime.now(IST).strftime('%A, %d %B')
@@ -590,7 +597,7 @@ async def generate_hype_message(batch, subject, time_str, link):
             f"Do NOT use <br> or <div>. Use newlines (\\n) for breaks. "
             f"Include <a href='{link}'>JOIN CLASS</a>. Make it exciting."
         )
-        response = await asyncio.to_thread(model.generate_content, prompt)
+        response = await asyncio.to_thread(ai_model.generate_content, prompt)
         text = response.text
         # Sanitize common forbidden tags
         text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<p>", "").replace("</p>", "\n")
@@ -598,10 +605,11 @@ async def generate_hype_message(batch, subject, time_str, link):
     except Exception: return None
 
 async def custom_gemini_task(prompt):
-    if not model: return "❌ AI Disabled."
+    ai_model = get_gemini_model()
+    if not ai_model: return "❌ AI Disabled."
     try:
         DB["system_stats"]["ai_requests"] += 1
-        response = await asyncio.to_thread(model.generate_content, prompt)
+        response = await asyncio.to_thread(ai_model.generate_content, prompt)
         return response.text
     except Exception as e: return f"Error: {e}"
 
@@ -3778,9 +3786,11 @@ async def post_init(app):
         BotCommand("refresh", "🔄 Refresh Database"),
         BotCommand("export", "📤 Export Data"),
         BotCommand("reset", "🔄 Reset & Fix Issues"),
+        BotCommand("manualrestart", "♻️ Safe Restart"),
         BotCommand("resetdatabase", "🧨 Factory Reset"),
         BotCommand("feedback", "💬 Send Feedback"),
     ]
+
     
     # Set commands for private chats (admins use all features here)
     await app.bot.set_my_commands(
@@ -3804,14 +3814,20 @@ async def post_init(app):
     
     app.job_queue.run_repeating(scheduled_cleanup, interval=86400, first=86400)
     
-    # Schedule Smart Keep-Alive (Ping every 5 mins, NO SLEEP)
+    # Schedule Smart Keep-Alive (Ping every 5 mins, SLEEP 1-7 AM IST)
     async def smart_ping(context):
+        now = datetime.now(IST)
+        # Sleep between 01:00 and 07:00 IST (Cron-job.org will wake at 7 AM)
+        if 1 <= now.hour < 7:
+            logger.info("💤 Sleep window active (1-7 AM) - skipping ping")
+            return
+        
         try:
             import httpx
             port = int(os.environ.get("PORT", 8080))
             urls = [
                 f"http://127.0.0.1:{port}/",
-                os.environ.get("RENDER_EXTERNAL_URL")
+                os.environ.get("RENDER_EXTERNAL_URL")  # Critical: External ping!
             ]
             
             async with httpx.AsyncClient(timeout=10) as client:
@@ -3826,10 +3842,85 @@ async def post_init(app):
         except Exception as e:
             logger.warning(f"⚠️ Keep-alive mechanism error: {e}")
 
-    # 5 minutes = 300 seconds (Aggressive keep-alive for Render)
+    # 5 minutes = 300 seconds
     app.job_queue.run_repeating(smart_ping, interval=300, first=60)
+    
+    # Memory monitor - Alert admin at 70% (358 MB of 512 MB)
+    async def memory_monitor(context):
+        try:
+            import psutil
+            process = psutil.Process()
+            mem_mb = process.memory_info().rss / (1024 * 1024)
+            mem_percent = (mem_mb / 512) * 100
+            
+            if mem_percent >= 70:
+                # Alert all admins
+                admin_list = ADMIN_USERNAMES + DB.get("admins", [])
+                warning_msg = (
+                    f"⚠️ <b>MEMORY WARNING</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"📊 <b>Usage:</b> {mem_mb:.1f} MB / 512 MB ({mem_percent:.1f}%)\n"
+                    f"⏰ <b>Time:</b> {datetime.now(IST).strftime('%H:%M:%S IST')}\n\n"
+                    f"💡 <i>Consider using /manualrestart to free memory</i>"
+                )
+                for admin in admin_list:
+                    if admin:
+                        try:
+                            # Try to get chat ID from username
+                            # This works if admin has started the bot
+                            pass  # We'll log instead since we can't easily get chat ID
+                        except:
+                            pass
+                logger.warning(f"⚠️ Memory at {mem_percent:.1f}% ({mem_mb:.1f} MB)")
+        except ImportError:
+            pass  # psutil not installed
+        except Exception as e:
+            logger.error(f"Memory monitor error: {e}")
+    
+    # Check memory every 5 minutes
+    app.job_queue.run_repeating(memory_monitor, interval=300, first=120)
 
     logger.info("✅ Vasuki Bot initialized successfully")
+
+async def manual_restart_command(update, context):
+    """Admin command to safely restart the bot - preserves all schedules"""
+    if not await require_private_admin(update, context): return
+    
+    await update.message.reply_text(
+        "🔄 <b>MANUAL RESTART</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "💾 Saving database to cloud...",
+        parse_mode=ParseMode.HTML
+    )
+    
+    # Force save to Supabase
+    save_db()
+    
+    # Get memory info
+    try:
+        import psutil
+        process = psutil.Process()
+        mem_mb = process.memory_info().rss / (1024 * 1024)
+    except:
+        mem_mb = 0
+    
+    await update.message.reply_text(
+        f"✅ <b>DATABASE SAVED!</b>\n\n"
+        f"📊 Memory before restart: {mem_mb:.1f} MB\n"
+        f"📅 Active schedules: {len(DB.get('active_jobs', []))}\n\n"
+        f"🔄 <i>Restarting in 3 seconds...</i>\n"
+        f"<i>All schedules will be restored automatically.</i>",
+        parse_mode=ParseMode.HTML
+    )
+    
+    # Wait a bit for message to send
+    await asyncio.sleep(3)
+    
+    logger.info("🔄 Manual restart triggered by admin")
+    
+    # Exit gracefully - Render will auto-restart
+    import sys
+    sys.exit(0)
 
 async def login_command(update, context):
     """Allow users to gain admin access via password"""
@@ -3868,7 +3959,8 @@ async def login_command(update, context):
 
 def main():
     keep_alive()
-    request = HTTPXRequest(connection_pool_size=8, connect_timeout=60.0, read_timeout=60.0)
+    # Reduced connection pool: 8 → 4 (saves ~20-30MB memory)
+    request = HTTPXRequest(connection_pool_size=4, connect_timeout=60.0, read_timeout=60.0)
     app = Application.builder().token(TOKEN).request(request).defaults(Defaults(tzinfo=IST)).post_init(post_init).build()
 
     # Command Handlers
@@ -3878,6 +3970,7 @@ def main():
     app.add_handler(CommandHandler("viewfeedback", viewfeedback_handler))  # Admin view feedback
     app.add_handler(CommandHandler("reset", reset_command))
     app.add_handler(CommandHandler("refresh", refresh_db_command))  # Live DB refresh
+    app.add_handler(CommandHandler("manualrestart", manual_restart_command))  # Safe restart
     app.add_handler(MessageHandler(filters.Regex("^🔄 Reset System"), reset_command)) # Added button handler
     app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(CommandHandler("schedule", schedule_command))

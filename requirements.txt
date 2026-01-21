@@ -7,3 +7,4 @@ google-generativeai
 pillow
 supabase>=2.0.0
 gunicorn
+psutil
