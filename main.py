@@ -102,6 +102,7 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
 # Timezone Configuration (India Standard Time)
 IST = pytz.timezone('Asia/Kolkata')
+START_TIME = datetime.now(IST)
 
 # ------------------------------------------------------------------------------
 # 📝 LOGGING CONFIGURATION
@@ -3979,6 +3980,33 @@ async def post_init(app):
 
     logger.info("✅ Vasuki Bot initialized successfully")
 
+async def stats_command(update, context):
+    """Show system statistics (memory, uptime) - Admin Private Only"""
+    if not await require_private_admin(update, context): return
+    
+    # Calculate Uptime
+    uptime = datetime.now(IST) - START_TIME
+    uptime_str = str(uptime).split('.')[0] # Remove microseconds
+
+    # Memory
+    mem_mb = 0
+    try:
+        import psutil
+        process = psutil.Process()
+        mem_mb = process.memory_info().rss / (1024 * 1024)
+    except:
+        pass
+    
+    msg = (
+        f"📊 <b>SYSTEM STATISTICS</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🧠 <b>Memory:</b> {mem_mb:.1f} MB\n"
+        f"⏱️ <b>Uptime:</b> {uptime_str}\n"
+        f"📅 <b>Pending Jobs:</b> {len(DB.get('active_jobs', []))}\n"
+        f"💾 <b>Storage:</b> {'☁️ Supabase' if supabase else '💻 Local'}"
+    )
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
 async def manual_restart_command(update, context):
     """Admin command to safely restart the bot - preserves all schedules"""
     if not await require_private_admin(update, context): return
@@ -4068,6 +4096,7 @@ def main():
     app.add_handler(CommandHandler("reset", reset_command))
     app.add_handler(CommandHandler("refresh", refresh_db_command))  # Live DB refresh
     app.add_handler(CommandHandler("manualrestart", manual_restart_command))  # Safe restart
+    app.add_handler(CommandHandler("stats", stats_command))  # Memory stats
     app.add_handler(CommandHandler("updategroup", updategroup_command))  # Fix group ID issues
     app.add_handler(MessageHandler(filters.Regex("^🔄 Reset System"), reset_command)) # Added button handler
 
