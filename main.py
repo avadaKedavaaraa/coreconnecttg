@@ -40,6 +40,7 @@ from flask import Flask
 from dotenv import load_dotenv
 import google.generativeai as genai
 from PIL import Image
+import urllib.request
 
 # ------------------------------------------------------------------------------
 # 📦 EXTERNAL IMPORTS
@@ -321,29 +322,67 @@ def remove_job_from_db(job_name):
     if len(DB["active_jobs"]) < original_count:
         save_db()
 
-def cleanup_old_data():
+def cleanup_old_data(context=None):
+    """
+    Clean up old data to prevent memory bloat.
+    Can be run as a scheduled job (context) or standalone.
+    """
     cleaned = 0
     now_ts = time.time()
     thirty_days = 30 * 24 * 60 * 60
     
+    # 1. Clean Attendance
     keys_to_remove = []
-    for job_id in DB["attendance"]:
-        try:
-            parts = job_id.split('_')
-            if len(parts) >= 4:
-                ts = int(parts[3])
-                if now_ts - ts > thirty_days:
-                    keys_to_remove.append(job_id)
-        except:
-            continue
+    if "attendance" in DB:
+        for job_id in DB["attendance"]:
+            try:
+                parts = job_id.split('_')
+                if len(parts) >= 4:
+                    ts = int(parts[3])
+                    if now_ts - ts > thirty_days:
+                        keys_to_remove.append(job_id)
+            except:
+                continue
             
     for k in keys_to_remove:
         del DB["attendance"][k]
         cleaned += 1
+
+    # 2. Clean Feedback (Keep last 50)
+    if "feedback" in DB and len(DB["feedback"]) > 50:
+        old_len = len(DB["feedback"])
+        DB["feedback"] = DB["feedback"][-50:]
+        removed = old_len - 50
+        logger.info(f"🧹 Pruned {removed} old feedback entries")
+        cleaned += removed
+
+    # 3. Clean Feedback (Keep last 50)
+    if "feedback" in DB and len(DB["feedback"]) > 50:
+        old_len = len(DB["feedback"])
+        DB["feedback"] = DB["feedback"][-50:]
+        removed = old_len - 50
+        logger.info(f"🧹 Pruned {removed} old feedback entries")
+        cleaned += removed
+
+    # 4. Clean Stale Active Jobs (older than 24h)
+    if "active_jobs" in DB:
+        valid_jobs = []
+        stale_jobs = 0
+        for job in DB["active_jobs"]:
+            # If job is more than 24 hours in the past, it's dead
+            if job["timestamp"] < now_ts - 86400:
+                stale_jobs += 1
+            else:
+                valid_jobs.append(job)
         
+        if stale_jobs > 0:
+            DB["active_jobs"] = valid_jobs
+            logger.info(f"🧹 Removed {stale_jobs} stale active jobs")
+            cleaned += stale_jobs
+
     if cleaned > 0:
         save_db()
-        logger.info(f"🧹 Cleaned up {cleaned} old records.")
+        logger.info(f"🧹 Total cleanup: {cleaned} records removed.")
 
 # ==============================================================================
 # 🚦 3. CONVERSATION STATES
@@ -3741,6 +3780,30 @@ async def post_init(app):
     await restore_jobs(app)
     cleanup_old_data()
     
+    # Schedule periodic cleanup (every 24 hours)
+    async def scheduled_cleanup(context):
+        cleanup_old_data(context)
+    
+    app.job_queue.run_repeating(scheduled_cleanup, interval=86400, first=86400)
+    
+    # Schedule Smart Keep-Alive (Ping every 14 mins, SLEEP 01:00-07:00 IST)
+    async def smart_ping(context):
+        now = datetime.now(IST)
+        # Sleep between 01:00 and 07:00
+        if 1 <= now.hour < 7:
+            return
+        
+        try:
+            port = int(os.environ.get("PORT", 8080))
+            # Ping localhost to reset Render's inactivity timer
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=10) as response:
+                pass
+        except Exception as e:
+            logger.warning(f"⚠️ Keep-alive ping failed: {e}")
+
+    # 14 minutes = 840 seconds (Render timeout is 15 mins)
+    app.job_queue.run_repeating(smart_ping, interval=840, first=60)
+
     logger.info("✅ Vasuki Bot initialized successfully")
 
 async def login_command(update, context):
