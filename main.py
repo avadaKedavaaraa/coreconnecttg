@@ -1129,9 +1129,13 @@ async def verify_topics_callback(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     
     data = query.data
+    page = 0
+    
     if data.startswith("verify_page_"):
         page = int(data.split("_")[-1])
-        await show_verify_topics_page(update, context, page=page, is_callback=True)
+    
+    # "verify_topics" data implies page 0, which is default
+    await show_verify_topics_page(update, context, page=page, is_callback=True)
 
 async def show_verify_topics_page(update_or_query, context, page=0, is_callback=False):
     """Helper to show a page of verified topics"""
