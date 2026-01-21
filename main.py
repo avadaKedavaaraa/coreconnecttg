@@ -356,13 +356,7 @@ def cleanup_old_data(context=None):
         logger.info(f"🧹 Pruned {removed} old feedback entries")
         cleaned += removed
 
-    # 3. Clean Feedback (Keep last 50)
-    if "feedback" in DB and len(DB["feedback"]) > 50:
-        old_len = len(DB["feedback"])
-        DB["feedback"] = DB["feedback"][-50:]
-        removed = old_len - 50
-        logger.info(f"🧹 Pruned {removed} old feedback entries")
-        cleaned += removed
+
 
     # 4. Clean Stale Active Jobs (older than 24h)
     if "active_jobs" in DB:
@@ -3027,26 +3021,54 @@ async def mark_attendance(update, context):
         await query.answer(f"✅ Present: {uid}")
 
 async def view_schedule_handler(update, context):
+    """View schedule with pagination"""
+    query = None
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        
     if not await require_private_admin(update, context): return
+    
+    # Determine page number
+    page = 0
+    if query and query.data.startswith("schedule_page_"):
+        page = int(query.data.split("_")[-1])
+    
     jobs = context.job_queue.jobs()
     
     # Filter only class jobs
     class_jobs = [j for j in jobs if j.name and isinstance(j.data, dict) and 'batch' in j.data]
     
     if not class_jobs:
-        await update.message.reply_text(
+        msg = (
             "📭 <b>NO UPCOMING CLASSES!</b>\n\n"
-            "<i>Schedule some classes first.</i>",
-            parse_mode=ParseMode.HTML
+            "<i>Schedule some classes first.</i>"
         )
+        if query:
+            await query.edit_message_text(msg, parse_mode=ParseMode.HTML)
+        else:
+            await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
         return
+    
+    # Sort by time
+    class_jobs.sort(key=lambda j: j.next_t)
+    
+    # Pagination Logic
+    PAGE_SIZE = 5
+    total_pages = (len(class_jobs) + PAGE_SIZE - 1) // PAGE_SIZE
+    page = max(0, min(page, total_pages - 1)) # Bounds check
+    
+    start_idx = page * PAGE_SIZE
+    end_idx = min(start_idx + PAGE_SIZE, len(class_jobs))
+    page_jobs = class_jobs[start_idx:end_idx]
     
     msg = (
         f"📅 <b>UPCOMING CLASSES</b> ({len(class_jobs)} total)\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"<i>Page {page + 1}/{total_pages}</i>\n\n"
     )
     
-    for job in sorted(class_jobs, key=lambda j: j.next_t):
+    for job in page_jobs:
         d = job.data
         # Format date nicely
         try:
@@ -3055,9 +3077,23 @@ async def view_schedule_handler(update, context):
             date_str = d.get('time_display', 'Unknown')
         msg += f"📖 <b>{d['batch']}</b> • {d['subject']}\n"
         msg += f"     ⏰ <i>{date_str}</i>\n\n"
+        
+    # Navigation Buttons
+    buttons = []
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"schedule_page_{page-1}"))
+    if page < total_pages - 1:
+        nav_row.append(InlineKeyboardButton("➡️ Next", callback_data=f"schedule_page_{page+1}"))
     
-    # Use chunking for long schedules
-    await send_long_message(context.bot, update.effective_chat.id, msg, parse_mode=ParseMode.HTML)
+    if nav_row:
+        buttons.append(nav_row)
+        
+    # Send or Edit Message
+    if query:
+        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(buttons), parse_mode=ParseMode.HTML)
+    else:
+        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(buttons), parse_mode=ParseMode.HTML)
 
 async def prompt_image_upload(update, context):
     if not await require_private_admin(update, context): return
@@ -3882,6 +3918,7 @@ def main():
     app.add_handler(MessageHandler(filters.Regex("^📊 Attendance"), view_attendance_stats)) 
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Regex("^📅 View Schedule"), view_schedule_handler))
+    app.add_handler(CallbackQueryHandler(view_schedule_handler, pattern="^schedule_page_"))
     app.add_handler(CallbackQueryHandler(mark_attendance, pattern="^att_"))
 
     txt_filter = filters.TEXT & ~filters.Regex(MENU_REGEX)
