@@ -1114,84 +1114,104 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Failed to send dashboard: {e}")
 
-async def verify_topics_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Verify all topics and show results"""
-    query = update.callback_query
-    await query.answer("Verifying topics...")
-    
-    grp_id = DB.get("config", {}).get("group_id")
-    topics = DB.get("topics", {})
-    
-    if not grp_id:
-        await query.edit_message_text("❌ <b>No group linked!</b>\n\nUse /start in a group first.", parse_mode=ParseMode.HTML)
-        return
-    
-    if not topics:
-        await query.edit_message_text("❌ <b>No topics registered!</b>\n\nGo to a topic and use /topic TopicName", parse_mode=ParseMode.HTML)
-        return
-    
-    results = []
-    success_count = 0
-    
-    for tid, name in topics.items():
-        success, error = await verify_topic_connectivity(context.bot, grp_id, tid)
-        if success:
-            results.append(f"✅ <b>{name}</b> (ID: {tid})")
-            success_count += 1
-        else:
-            results.append(f"❌ <b>{name}</b> - {error}")
-    
-    msg = (
-        f"🔍 <b>TOPIC VERIFICATION</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"📊 <b>{success_count}/{len(topics)}</b> topics functional\n\n"
-        + "\n".join(results)
-    )
-    
     await query.edit_message_text(msg, parse_mode=ParseMode.HTML)
+
+# Pagination constant
+TOPICS_PER_PAGE = 10
 
 async def verify_topics_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Command handler for /verifytopics"""
     if not await require_private_admin(update, context): return
     
+    await show_verify_topics_page(update, context, page=0)
+
+async def verify_topics_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle pagination callbacks for verify topics"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    if data.startswith("verify_page_"):
+        page = int(data.split("_")[-1])
+        await show_verify_topics_page(update, context, page=page, is_callback=True)
+
+async def show_verify_topics_page(update_or_query, context, page=0, is_callback=False):
+    """Helper to show a page of verified topics"""
     grp_id = DB.get("config", {}).get("group_id")
     grp_name = DB.get("config", {}).get("group_name", "Unknown")
     topics = DB.get("topics", {})
     pending_jobs = len(DB.get("active_jobs", []))
     
+    # Reply target
+    target = update_or_query.message if is_callback else update_or_query.message
+    if is_callback:
+        edit_func = update_or_query.edit_message_text
+    else:
+        edit_func = target.reply_text
+
     if not grp_id:
-        await update.message.reply_text("❌ <b>No group linked!</b>\n\nUse /start in a group first.", parse_mode=ParseMode.HTML)
+        text = "❌ <b>No group linked!</b>\n\nUse /start in a group first."
+        if is_callback: await edit_func(text, parse_mode=ParseMode.HTML)
+        else: await edit_func(text, parse_mode=ParseMode.HTML)
         return
     
     if not topics:
-        await update.message.reply_text("❌ <b>No topics registered!</b>\n\nGo to a topic and use /topic TopicName", parse_mode=ParseMode.HTML)
+        text = "❌ <b>No topics registered!</b>\n\nGo to a topic and use /topic TopicName"
+        if is_callback: await edit_func(text, parse_mode=ParseMode.HTML)
+        else: await edit_func(text, parse_mode=ParseMode.HTML)
         return
+
+    # Convert to list and sort
+    topic_items = list(topics.items())
+    total_topics = len(topic_items)
+    total_pages = (total_topics + TOPICS_PER_PAGE - 1) // TOPICS_PER_PAGE
     
-    msg = await update.message.reply_text("🔄 <b>Verifying topics...</b>", parse_mode=ParseMode.HTML)
+    # Slice for current page
+    start_idx = page * TOPICS_PER_PAGE
+    end_idx = start_idx + TOPICS_PER_PAGE
+    current_batch = topic_items[start_idx:end_idx]
     
+    # Verify this batch
+    if not is_callback: # Only show "Verifying..." on initial command
+        initial_msg = await target.reply_text("🔄 <b>Verifying topics...</b>", parse_mode=ParseMode.HTML)
+        edit_func = initial_msg.edit_text # Switch to editing the status msg
+
     results = []
     success_count = 0
+    # Note: Success count here is only for THIS page. 
+    # To get global success count we'd need to verify all, which is slow.
+    # We'll just show status for current page items.
     
-    for tid, name in topics.items():
+    for tid, name in current_batch:
         success, error = await verify_topic_connectivity(context.bot, grp_id, tid)
-        if success:
-            results.append(f"✅ <b>{name}</b> (ID: {tid})")
-            success_count += 1
-        else:
-            results.append(f"❌ <b>{name}</b> - {error}")
+        icon = "✅" if success else "❌"
+        status = f"(ID: {tid})" if success else f"- {error}"
+        results.append(f"{icon} <b>{name}</b> {status}")
+        if success: success_count += 1
+        
+    # Build Navigation Keyboard
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"verify_page_{page-1}"))
+    if page < total_pages - 1:
+        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"verify_page_{page+1}"))
+    
+    keyboard = [nav_row] if nav_row else []
+    
+    # Refresh button
+    keyboard.append([InlineKeyboardButton("🔄 Refresh List", callback_data=f"verify_page_{page}")])
     
     result_msg = (
-        f"🔍 <b>TOPIC VERIFICATION</b>\n"
+        f"🔍 <b>TOPIC VERIFICATION</b> (Page {page+1}/{total_pages})\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"📍 <b>Group:</b> {grp_name}\n"
         f"🆔 <b>ID:</b> <code>{grp_id}</code>\n"
         f"📅 <b>Pending Jobs:</b> {pending_jobs}\n\n"
-        f"📊 <b>{success_count}/{len(topics)}</b> topics functional\n\n"
         + "\n".join(results) +
         f"\n\n💡 <i>Use /updategroup in your group to fix ID issues</i>"
     )
     
-    await msg.edit_text(result_msg, parse_mode=ParseMode.HTML)
+    await edit_func(result_msg, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_navigation(update, context):
     try:
@@ -4079,6 +4099,8 @@ def main():
     app.add_handler(MessageHandler(filters.Regex("^📅 View Schedule"), view_schedule_handler))
     app.add_handler(CallbackQueryHandler(view_schedule_handler, pattern="^schedule_page_"))
     app.add_handler(CallbackQueryHandler(mark_attendance, pattern="^att_"))
+    app.add_handler(CallbackQueryHandler(verify_topics_callback, pattern="^verify_page_")) # Pagination
+
 
     txt_filter = filters.TEXT & ~filters.Regex(MENU_REGEX)
 
