@@ -1050,12 +1050,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"✅ <i>Successfully linked to:</i>\n"
                 f"📍 <b>{update.effective_chat.title}</b>\n\n"
                 f"💡 <i>Use /start in DM for full control!</i>\n\n"
-                f"<i>This message will auto-delete in 5 seconds...</i>",
+                f"<i>This message will auto-delete in 1 seconds...</i>",
                 parse_mode=ParseMode.HTML,
                 disable_notification=True  # Silent
             )
-            # Schedule auto-delete after 5 seconds
-            await asyncio.sleep(5)
+            # Schedule auto-delete after 1 seconds
+            await asyncio.sleep(1)
             try:
                 await msg.delete()
             except:
@@ -1135,7 +1135,7 @@ async def verify_topics_callback(update: Update, context: ContextTypes.DEFAULT_T
         page = int(data.split("_")[-1])
     
     # "verify_topics" data implies page 0, which is default
-    await show_verify_topics_page(update, context, page=page, is_callback=True)
+    await show_verify_topics_page(query, context, page=page, is_callback=True)
 
 async def show_verify_topics_page(update_or_query, context, page=0, is_callback=False):
     """Helper to show a page of verified topics"""
