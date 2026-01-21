@@ -327,6 +327,18 @@ def remove_job_from_db(job_name):
     if len(DB["active_jobs"]) < original_count:
         save_db()
 
+def update_all_jobs_chat_id(new_chat_id):
+    """Update all pending jobs to use the new chat_id - fixes 'kicked from group' errors"""
+    updated = 0
+    for job in DB.get("active_jobs", []):
+        if job.get("chat_id") != new_chat_id:
+            job["chat_id"] = new_chat_id
+            updated += 1
+    if updated > 0:
+        save_db()
+        logger.info(f"🔄 Updated {updated} jobs with new chat_id: {new_chat_id}")
+    return updated
+
 def cleanup_old_data(context=None):
     """
     Clean up old data to prevent memory bloat.
@@ -672,8 +684,6 @@ def is_admin(username):
         return True
         
     return False
-        
-    return False
 
 def is_super_admin(username):
     """Check if username is the primary admin (from env)"""
@@ -923,6 +933,65 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             # Different group - log but don't overwrite
             logger.info(f"ℹ️ Bot added to {chat.title} but already linked to {DB['config']['group_name']}")
 
+async def updategroup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Update the linked group ID - ENV ADMINS ONLY, responds in private"""
+    chat = update.effective_chat
+    user = update.effective_user
+    
+    # Only works in groups
+    if chat.type == "private":
+        await update.message.reply_text(
+            "⚠️ <b>Use this command in a GROUP, not private chat!</b>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
+    # Both ENV and DB admins allowed
+    if not is_admin(user.username):
+        # Silently ignore non-admins
+        return
+
+    
+    # Delete the command message from group immediately
+    try:
+        await update.message.delete()
+    except:
+        pass  # May fail if bot lacks delete permission
+    
+    old_id = DB.get("config", {}).get("group_id")
+    new_id = chat.id
+    
+    # Update config
+    DB["config"]["group_id"] = new_id
+    DB["config"]["group_name"] = chat.title
+    
+    # Update all pending jobs
+    updated_jobs = update_all_jobs_chat_id(new_id)
+    
+    save_db()
+    
+    # Send response to admin's PRIVATE chat
+    try:
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=f"✅ <b>GROUP UPDATED!</b>\n"
+                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                 f"📍 <b>Group:</b> {chat.title}\n"
+                 f"🆔 <b>New ID:</b> <code>{new_id}</code>\n"
+                 f"🔄 <b>Jobs Updated:</b> {updated_jobs}\n\n"
+                 f"<i>All scheduled messages will now be sent here.</i>",
+            parse_mode=ParseMode.HTML
+        )
+    except Exception as e:
+        # Fallback: send a silent message in group if private fails
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=f"✅ Group updated! Check /verifytopics for details.",
+            disable_notification=True
+        )
+    
+    logger.info(f"🔄 Group updated: {old_id} → {new_id} ({chat.title})")
+
 # ==============================================================================
 # 🏠 8. CORE HANDLERS
 # ==============================================================================
@@ -1086,7 +1155,9 @@ async def verify_topics_command(update: Update, context: ContextTypes.DEFAULT_TY
     if not await require_private_admin(update, context): return
     
     grp_id = DB.get("config", {}).get("group_id")
+    grp_name = DB.get("config", {}).get("group_name", "Unknown")
     topics = DB.get("topics", {})
+    pending_jobs = len(DB.get("active_jobs", []))
     
     if not grp_id:
         await update.message.reply_text("❌ <b>No group linked!</b>\n\nUse /start in a group first.", parse_mode=ParseMode.HTML)
@@ -1112,8 +1183,12 @@ async def verify_topics_command(update: Update, context: ContextTypes.DEFAULT_TY
     result_msg = (
         f"🔍 <b>TOPIC VERIFICATION</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📍 <b>Group:</b> {grp_name}\n"
+        f"🆔 <b>ID:</b> <code>{grp_id}</code>\n"
+        f"📅 <b>Pending Jobs:</b> {pending_jobs}\n\n"
         f"📊 <b>{success_count}/{len(topics)}</b> topics functional\n\n"
-        + "\n".join(results)
+        + "\n".join(results) +
+        f"\n\n💡 <i>Use /updategroup in your group to fix ID issues</i>"
     )
     
     await msg.edit_text(result_msg, parse_mode=ParseMode.HTML)
@@ -1978,9 +2053,9 @@ async def send_alert_job(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"❌ Failed to send alert (attempt {retry_count + 1}): {e}")
         
         if retry_count < max_retries:
-            # Wake server and retry with jitter (1-2 minutes)
-            await wake_server()
+            # Retry with jitter (1-2 minutes)
             new_data = data.copy()
+
             new_data['retry_count'] = retry_count + 1
             
             # Add jitter to prevent thundering herd (60-90 seconds)
@@ -2385,12 +2460,10 @@ async def send_custom_msg_job(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"❌ Failed to send custom message: {e}")
 
-    except Exception as e:
-        logger.error(f"❌ Failed to send custom message: {e}")
-
 # ==============================================================================
 # 💬 FORUM TOPIC MANAGEMENT
 # ==============================================================================
+
 async def register_topic_command(update, context):
     """Command to register current topic: /topic <name>"""
     try:
@@ -3766,9 +3839,10 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 # 🚀 16. MAIN
 # ==============================================================================
 async def post_init(app):
-    # Group commands - ONLY feedback is available in groups
+    # Group commands - feedback + updategroup for admins
     group_commands = [
         BotCommand("feedback", "💬 Send Feedback to Vasuki Bot"),
+        BotCommand("updategroup", "🔄 Update Group Link (Admin)"),
     ]
     
     # Private chat commands - all commands including admin tools
@@ -3787,6 +3861,7 @@ async def post_init(app):
         BotCommand("export", "📤 Export Data"),
         BotCommand("reset", "🔄 Reset & Fix Issues"),
         BotCommand("manualrestart", "♻️ Safe Restart"),
+        BotCommand("updategroup", "🔄 Update Group Link"),
         BotCommand("resetdatabase", "🧨 Factory Reset"),
         BotCommand("feedback", "💬 Send Feedback"),
     ]
@@ -3971,7 +4046,9 @@ def main():
     app.add_handler(CommandHandler("reset", reset_command))
     app.add_handler(CommandHandler("refresh", refresh_db_command))  # Live DB refresh
     app.add_handler(CommandHandler("manualrestart", manual_restart_command))  # Safe restart
+    app.add_handler(CommandHandler("updategroup", updategroup_command))  # Fix group ID issues
     app.add_handler(MessageHandler(filters.Regex("^🔄 Reset System"), reset_command)) # Added button handler
+
     app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(CommandHandler("schedule", schedule_command))
     app.add_handler(CommandHandler("export", export_command))
