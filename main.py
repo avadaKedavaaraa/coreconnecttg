@@ -414,7 +414,7 @@ def cleanup_old_data(context=None):
 ) = range(40)
 
 # Regex to match any menu button for canceling wizards
-MENU_REGEX = "^(📸 AI Auto-Schedule|🧠 Custom AI|🟦 Schedule CSDA|🟧 Schedule AICS|📝 Custom Message|➕ Add Subject|📂 More Options|✏️ Edit Class|🗑️ Delete Class|📅 View Schedule|📊 Attendance|📚 All Subjects|📤 Export Data|📥 Import Data|👥 Manage Admins|💬 Manage Topics|🛠️ Admin Tools|🔙 Back to Main|🌙 Night Schedule|☁️ Force Save|🔄 Reset System)$"
+MENU_REGEX = "^(📸 AI Auto-Schedule|🧠 Custom AI|🟦 Schedule CSDA|🟧 Schedule AICS|📝 Custom Message|➕ Add Subject|📂 More Options|✏️ Edit Class|🗑️ Delete Class|📅 View Schedule|📊 Attendance|📚 All Subjects|📤 Export Data|📥 Import Data|👥 Manage Admins|💬 Manage Topics|🛠️ Admin Tools|🔙 Back to Main|🌙 Night Schedule|☁️ Force Save|🔄 Reset System|🗑️ Remove Topic|➕ Add Topic Manual|📋 List Topics|👤 Add Admin|🗑️ Remove Admin|📋 View Admins)$"
 
 # ==============================================================================
 # 🛠️ UTILITY FUNCTIONS
@@ -1777,7 +1777,7 @@ async def edit_select_job(update, context):
     context.user_data['edit_page'] = 0  # Reset page for next time
     jobs = context.job_queue.get_jobs_by_name(context.user_data['edit_job_name'])
     if not jobs: return ConversationHandler.END
-    job_data = jobs[0].data
+    job_data = jobs[0].data or {}
     context.user_data['old_job_data'] = job_data
     context.user_data['old_next_t'] = jobs[0].next_t
     
