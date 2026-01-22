@@ -810,8 +810,8 @@ async def start_remove_admin(update, context):
         
         if not is_super_admin(update.effective_user.username):
             await update.message.reply_text(
-                "⛔ <b>ACCESS DENIED!</b>\n\n"
-                "<i>Only the primary admin can remove admins.</i>",
+                "⛔ <b>ARRE BHAI BHAI BHAI!</b>\n\n"
+                "<i>Ye Kaam Sirf Malik Ka Hai! AAP Apna Dekhiye Pehle! 😆</i>",
                 parse_mode=ParseMode.HTML
             )
             return ConversationHandler.END
@@ -1029,9 +1029,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Strict Access Control - non-admins get nothing
     if not is_admin(user.username):
         await update.message.reply_text(
-            f"⛔ <b>ACCESS DENIED</b>\n\n"
-            f"<i>You are not authorized to control The Bot.</i>\n\n"
-            f"🔐 <b>Grant Access:</b> Contact @AvadaKedavaaraa",
+            f"⛔ <b>DEKH BHAI DEKH!</b>\n\n"
+            f"<i>Na Apka NAm List ME na HAi 😂 !</i>\n\n"
+            f"🔐 <b>Access Chahiye?</b> Contact @AvadaKedavaaraa",
             parse_mode=ParseMode.HTML
         )
         return
@@ -1218,7 +1218,7 @@ async def handle_navigation(update, context):
         user = update.effective_user
         if not is_admin(user.username):
             await update.message.reply_text(
-                "⛔ <b>ACCESS DENIED</b>\nContact @AvadaKedavaaraa",
+                "⛔ <b>BHOOL JA BHAI!</b>\n<i>Apke Bas Ki Nhi Hai Ye! 😜</i>\nContact @AvadaKedavaaraa",
                 parse_mode="HTML"
             )
             return
@@ -3322,7 +3322,7 @@ async def feedback_handler(update, context):
     # In private chat, require admin. In groups, allow anyone.
     if chat_type == 'private' and not is_admin(user.username):
         await update.message.reply_text(
-            f"⛔ <b>ACCESS DENIED</b>\nContact @AvadaKedavaaraa",
+            f"⛔ <b>sriman!</b>\n<i>NA aapka naam list me na hai</i>\nContact @AvadaKedavaaraa",
             parse_mode=ParseMode.HTML
         )
         return
@@ -3354,6 +3354,13 @@ async def feedback_handler(update, context):
             "<i>Msg 10387447 years me chla jayega 🙏</i>",
             parse_mode=ParseMode.HTML
         )
+        
+        # Delete the user's original feedback message from the group
+        if chat_type != 'private':
+            try:
+                await update.message.delete()
+            except Exception as e:
+                logger.warning(f"Could not delete feedback message: {e}")
     else:
         await update.message.reply_text(
             "📝 <b>ANONYMOUS FEEDBACK</b>\n\n"
