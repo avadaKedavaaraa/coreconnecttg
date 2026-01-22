@@ -155,9 +155,6 @@ else:
 # 💾 2. DATABASE & PERSISTENCE LAYER (SUPABASE VERSION)
 # ==============================================================================
 
-# Regex to identify Menu Buttons (Updated with 📚)
-MENU_REGEX = "^(📸|🧠|🟦|🟧|➕|📂|✏️|🗑️|📅|📊|📚|📤|📥|🔙)"
-
 # Default Database Structure
 DEFAULT_DB = {
     "config": {
@@ -710,7 +707,7 @@ async def require_private_admin(update, context):
         if not is_admin(user.username):
             await update.message.reply_text(
                 f"⛔ <b>ACCESS DENIED</b>\n\n"
-                f"<i>You are not authorized to control Vasuki Bot.</i>\n\n"
+                f"<i>Na Munna Na Ye Sb Nhi Karte. Jao Pdhai Kro</i>\n\n"
                 f"🔐 <b>Grant Access:</b> Contact @AvadaKedavaaraa\n"
                 f"🔑 <b>Or Login:</b> <code>/login [password]</code>",
                 parse_mode=ParseMode.HTML
@@ -721,7 +718,7 @@ async def require_private_admin(update, context):
         if not is_private_chat(update):
             await update.message.reply_text(
                 "🔒 <b>PRIVATE CHAT ONLY!</b>\n\n"
-                "<i>Please use this command in a private chat with me.</i>",
+                "<i>Malik Bhul Gye Kya? Group Me Nhi Private Me Aao.</i>",
                 parse_mode=ParseMode.HTML,
                 disable_web_page_preview=True
             )
@@ -744,7 +741,7 @@ async def start_add_admin(update, context):
         if not is_super_admin(update.effective_user.username):
             await update.message.reply_text(
                 "⛔ <b>ACCESS DENIED!</b>\n\n"
-                "<i>Only the primary admin can add new admins.</i>",
+                "<i>Chla JA yha se .......</i>",
                 parse_mode=ParseMode.HTML
             )
             return ConversationHandler.END
@@ -3353,15 +3350,15 @@ async def feedback_handler(update, context):
         # Show ANONYMOUS confirmation to user (they think it's anonymous)
         await update.message.reply_text(
             "✅ <b>ANONYMOUS FEEDBACK SENT!</b>\n\n"
-            "<i>Your feedback has been received anonymously.</i>\n"
-            "<i>Thank you for helping us improve! 🙏</i>",
+            "<i>Jis Byakti Se aap Sampark Krna Chahte Hai Wo Av So Rhe Hai </i>\n"
+            "<i>Msg 10387447 years me chla jayega 🙏</i>",
             parse_mode=ParseMode.HTML
         )
     else:
         await update.message.reply_text(
             "📝 <b>ANONYMOUS FEEDBACK</b>\n\n"
-            "<i>Your feedback will be sent anonymously.</i>\n\n"
-            "<b>Usage:</b> <code>/feedback Your message here</code>",
+            "<i>Ekdm Secret Rkhne ka re Baba</i>\n\n"
+            "<b>Usage:</b> <code>/feedback ke baad ek space dena fir likhna message</code>",
             parse_mode=ParseMode.HTML
         )
 
@@ -3389,20 +3386,21 @@ async def viewfeedback_handler(update, context):
         if isinstance(entry, dict):
             # New format with user details
             timestamp = entry.get("timestamp", "Unknown time")
-            message = entry.get("message", "No message")
-            username = entry.get("username", "no_username")
-            name = entry.get("name", "Unknown")
+            message = html.escape(str(entry.get("message", "No message")))
+            username = html.escape(str(entry.get("username", "no_username")))
+            name = html.escape(str(entry.get("name", "Unknown")))
             user_id = entry.get("user_id", "N/A")
-            chat_type = entry.get("chat_type", "Unknown")
+            chat_type = html.escape(str(entry.get("chat_type", "Unknown")))
             
-            msg += f"<b>{i}.</b> \ud83d\udcc5 {timestamp}\n"
-            msg += f"   \ud83d\udc64 <b>{name}</b> (@{username})\n"
-            msg += f"   \ud83c\udd94 <code>{user_id}</code>\n"
-            msg += f"   \ud83d\udccd {chat_type}\n"
-            msg += f"   \ud83d\udcdd <i>{message[:100]}{'...' if len(message) > 100 else ''}</i>\n\n"
+            msg += f"<b>{i}.</b> 📅 {timestamp}\n"
+            msg += f"   👤 <b>{name}</b> (@{username})\n"
+            msg += f"   🆔 <code>{user_id}</code>\n"
+            msg += f"   📍 {chat_type}\n"
+            msg += f"   📝 <i>{message[:100]}{'...' if len(message) > 100 else ''}</i>\n\n"
         else:
             # Old string format (legacy)
-            msg += f"<b>{i}.</b> {str(entry)[:150]}{'...' if len(str(entry)) > 150 else ''}\n\n"
+            escaped_entry = html.escape(str(entry)[:150])
+            msg += f"<b>{i}.</b> {escaped_entry}{'...' if len(str(entry)) > 150 else ''}\n\n"
     
     total = len(feedback_list)
     msg += f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
@@ -3912,14 +3910,8 @@ async def post_init(app):
     
     app.job_queue.run_repeating(scheduled_cleanup, interval=86400, first=86400)
     
-    # Schedule Smart Keep-Alive (Ping every 5 mins, SLEEP 1-7 AM IST)
+    # Schedule Smart Keep-Alive (Ping every 5 mins - 24/7 to prevent Render spin-down)
     async def smart_ping(context):
-        now = datetime.now(IST)
-        # Sleep between 01:00 and 07:00 IST (Cron-job.org will wake at 7 AM)
-        if 1 <= now.hour < 7:
-            logger.info("💤 Sleep window active (1-7 AM) - skipping ping")
-            return
-        
         try:
             import httpx
             port = int(os.environ.get("PORT", 8080))
