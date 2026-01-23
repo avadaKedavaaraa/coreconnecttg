@@ -38,7 +38,7 @@ from datetime import datetime, timedelta, time as dtime
 import pytz
 from flask import Flask
 from dotenv import load_dotenv
-import google.generativeai as genai
+# import google.generativeai as genai # Disabled to save memory
 from PIL import Image
 import urllib.request
 
@@ -128,17 +128,18 @@ logger = logging.getLogger(__name__)
 model = None  # Will be initialized on first AI request
 
 def get_gemini_model():
-    """Lazy-load Gemini model only when needed"""
-    global model
-    if model is None and GEMINI_API_KEY:
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=GEMINI_API_KEY)
-            model = genai.GenerativeModel('gemini-2.5-flash')
-            logger.info("✅ Gemini AI loaded (lazy)")
-        except Exception as e:
-            logger.error(f"❌ Gemini AI Failed: {e}")
-    return model
+    """Gemini disabled to save memory"""
+    return None
+    # global model
+    # if model is None and GEMINI_API_KEY:
+    #     try:
+    #         import google.generativeai as genai
+    #         genai.configure(api_key=GEMINI_API_KEY)
+    #         model = genai.GenerativeModel('gemini-2.5-flash')
+    #         logger.info("✅ Gemini AI loaded (lazy)")
+    #     except Exception as e:
+    #         logger.error(f"❌ Gemini AI Failed: {e}")
+    # return model
 
 # Supabase Connection
 supabase: Client = None

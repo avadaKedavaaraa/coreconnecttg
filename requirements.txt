@@ -3,7 +3,7 @@ Flask
 pytz
 tzdata
 python-dotenv
-google-generativeai
+# google-generativeai
 pillow
 supabase>=2.0.0
 gunicorn
