@@ -1934,9 +1934,13 @@ async def edit_scope_handler(update, context):
         return ConversationHandler.END
     
     ref_job = jobs[0]
-    subject = ref_job.data.get('subject')
-    batch = ref_job.data.get('batch')
-    ref_day = ref_job.next_t.strftime('%A')
+    ref_data = safe_job_data(ref_job)
+    subject = ref_data.get('subject')
+    batch = ref_data.get('batch')
+    try:
+        ref_day = ref_job.next_t.strftime('%A')
+    except:
+        ref_day = "Unknown"
     
     # Find jobs to edit based on scope
     all_jobs = context.job_queue.jobs()
@@ -1945,9 +1949,16 @@ async def edit_scope_handler(update, context):
     if scope == "single":
         jobs_to_edit = [ref_job]
     elif scope == "day":
-        jobs_to_edit = [j for j in all_jobs if j.data.get('subject') == subject and j.data.get('batch') == batch and j.next_t.strftime('%A') == ref_day]
+        for j in all_jobs:
+            d = safe_job_data(j)
+            j_day = j.next_t.strftime('%A') if j.next_t else "Unknown"
+            if d.get('subject') == subject and d.get('batch') == batch and j_day == ref_day:
+                jobs_to_edit.append(j)
     elif scope == "subject":
-        jobs_to_edit = [j for j in all_jobs if j.data.get('subject') == subject and j.data.get('batch') == batch]
+        for j in all_jobs:
+            d = safe_job_data(j)
+            if d.get('subject') == subject and d.get('batch') == batch:
+                jobs_to_edit.append(j)
     
     if not jobs_to_edit:
         await query.edit_message_text("❌ <b>NO MATCHING JOBS!</b>", parse_mode=ParseMode.HTML)
@@ -3540,6 +3551,7 @@ async def handle_kill(update, context):
         return
     
     # Handle delete all confirmation
+    # Handle delete all confirmation
     if data == "kill_all_confirm":
         job_names = context.user_data.get('delete_jobs', [])
         count = 0
@@ -3548,6 +3560,116 @@ async def handle_kill(update, context):
             for j in jobs:
                 j.schedule_removal()
             remove_job_from_db(name)
+            count += 1
+        
+        await query.edit_message_text(f"🗑️ <b>DELETED {count} CLASSES!</b>", parse_mode=ParseMode.HTML)
+        return
+
+    # Handle Single Delete - Show Scope Options
+    job_name = data.replace("kill_", "")
+    jobs = context.job_queue.get_jobs_by_name(job_name)
+    if not jobs:
+        await query.answer("❌ Job not found!", show_alert=True)
+        # Refresh page
+        await show_delete_page(query, context, edit=True)
+        return
+    
+    job = jobs[0]
+    data_dict = safe_job_data(job)
+    subject = data_dict.get('subject', 'Unknown')
+    batch = data_dict.get('batch', 'Unknown')
+    context.user_data['del_job_name'] = job_name
+    
+    # Safe day name
+    try:
+        day_name = job.next_t.strftime('%A')
+    except:
+        day_name = "Unknown"
+
+    kb = [
+        [InlineKeyboardButton(f"🎯 Delete This Only", callback_data="del_scope_single")],
+        [InlineKeyboardButton(f"📅 Delete All Future {subject}", callback_data="del_scope_subject")],
+        [InlineKeyboardButton("🔙 Cancel", callback_data="del_scope_cancel")]
+    ]
+    
+    await query.edit_message_text(
+        f"🗑️ <b>DELETE CONFIRMATION</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📖 Subject: <b>{subject}</b>\n"
+        f"🎯 Batch: <b>{batch}</b>\n"
+        f"📅 Day: <b>{day_name}</b>\n\n"
+        f"<i>What do you want to delete?</i> 👇",
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode=ParseMode.HTML
+    )
+
+async def delete_scope_handler(update, context):
+    """Handle delete scope selection"""
+    query = update.callback_query
+    await query.answer()
+    scope = query.data.replace("del_scope_", "")
+    
+    if scope == "cancel":
+        await show_delete_page(query, context, edit=True)
+        return
+
+    job_name = context.user_data.get('del_job_name')
+    if not job_name:
+        await query.edit_message_text("❌ Error: Job lost.")
+        return
+
+    jobs = context.job_queue.get_jobs_by_name(job_name)
+    if not jobs:
+        await query.edit_message_text("❌ Job already deleted.")
+        return
+    
+    ref_job = jobs[0]
+    ref_data = safe_job_data(ref_job)
+    subject = ref_data.get('subject')
+    batch = ref_data.get('batch')
+    
+    all_jobs = context.job_queue.jobs()
+    jobs_to_kill = []
+
+    if scope == "single":
+        jobs_to_kill = [ref_job]
+    elif scope == "subject":
+        # Delete all future classes for this subject/batch
+        for j in all_jobs:
+            d = safe_job_data(j)
+            if d.get('subject') == subject and d.get('batch') == batch:
+                jobs_to_kill.append(j)
+    
+    count = 0
+    for j in jobs_to_kill:
+        try:
+            remove_job_from_db(j.name)
+            j.schedule_removal()
+            count += 1
+        except: pass
+    
+    await query.edit_message_text(
+        f"✅ <b>DELETED {count} CLASSES!</b>\n\n"
+        f"Refreshed list below...",
+        parse_mode=ParseMode.HTML
+    )
+    # Rerender list after short delay
+    await asyncio.sleep(1.5)
+    
+    # Re-fetch valid jobs for pagination
+    jobs = context.job_queue.jobs()
+    valid_jobs = []
+    for j in jobs:
+        d = safe_job_data(j)
+        if j.name and d and 'batch' in d and len(f"kill_{j.name}") <= 64:
+            valid_jobs.append(j)
+    valid_jobs.sort(key=lambda j: j.next_t)
+    
+    # Update context
+    context.user_data['delete_jobs'] = [j.name for j in valid_jobs]
+    context.user_data['delete_page'] = 0
+    
+    await show_delete_page(query, context, valid_jobs, edit=True)
             count += 1
         
         context.user_data['delete_jobs'] = []
@@ -4142,6 +4264,7 @@ def main():
     app.add_handler(MessageHandler(filters.Document.MimeType("application/json"), handle_import_file))
     app.add_handler(MessageHandler(filters.Regex("^🗑️ Delete Class"), delete_menu))
     app.add_handler(CallbackQueryHandler(handle_kill, pattern="^(kill_|del_page_)"))
+    app.add_handler(CallbackQueryHandler(delete_scope_handler, pattern="^del_scope_"))
     
     # NEW: Added View All Subjects Handler
     app.add_handler(MessageHandler(filters.Regex("^📚 All Subjects"), view_all_subjects))
