@@ -467,7 +467,7 @@ def sanitize_html(text):
 
 def safe_job_data(job):
     """Safely get job data ensuring it returns a dict"""
-    if job and hasattr(job, 'data') and job.data:
+    if job and hasattr(job, 'data') and isinstance(job.data, dict):
         return job.data
     return {}
 
@@ -2042,7 +2042,7 @@ async def send_alert_job(context: ContextTypes.DEFAULT_TYPE):
             if not text: 
                 text = f"<b>🔔 {data['batch']} CLASS: {data['subject']}</b>\n⏰ {data['time_display']}"
         else:
-            text = f"{data.get('manual_msg')}\n⏰ {data['time_display']}"
+            text = f"{data.get('manual_msg')}"
         
         # Sanitize any forbidden HTML tags
         text = sanitize_html(text)
@@ -3244,10 +3244,17 @@ async def view_attendance_stats(update, context):
     for k in keys:
         try:
             parts = k.split('_')
+            # Extract info from ID: batch_day_timestamp_count
+            batch = safe_decode(parts[0])
+            ts = int(parts[2])
+            date_str = datetime.fromtimestamp(ts, IST).strftime("%d %b, %H:%M")
             count = len(DB['attendance'][k])
-            msg += f"📖 <b>{parts[0]}</b>\n"
-            msg += f"     👥 <i>{count} students attended</i>\n\n"
-        except: continue
+            
+            msg += f"📅 <b>{date_str}</b>\n"
+            msg += f"   📖 {html.escape(batch)}\n"
+            msg += f"   👥 <i>{count} present</i>\n\n"
+        except Exception: 
+            continue
     await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
 async def handle_photo(update, context):
@@ -3442,8 +3449,10 @@ async def viewfeedback_handler(update, context):
             msg += f"   📝 <i>{html.escape(message[:100])}{'...' if len(message) > 100 else ''}</i>\n\n"
         else:
             # Old string format (legacy)
-            escaped_entry = html.escape(str(entry)[:150])
-            msg += f"<b>{i}.</b> {escaped_entry}{'...' if len(str(entry)) > 150 else ''}\n\n"
+            raw = str(entry)
+            safe_raw = safe_decode(raw)
+            escaped_entry = html.escape(safe_raw[:150])
+            msg += f"<b>{i}.</b> {escaped_entry}{'...' if len(safe_raw) > 150 else ''}\n\n"
     
     total = len(feedback_list)
     msg += f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
@@ -4010,6 +4019,7 @@ async def post_init(app):
         BotCommand("updategroup", "🔄 Update Group Link"),
         BotCommand("resetdatabase", "🧨 Factory Reset"),
         BotCommand("feedback", "💬 Send Feedback"),
+        BotCommand("viewattendance", "📊 View Attendance"), # Alias added
     ]
 
     
@@ -4222,6 +4232,7 @@ def main():
     app.add_handler(CommandHandler("export", export_command))
     app.add_handler(CommandHandler("subjects", subjects_command))
     app.add_handler(CommandHandler("attendance", attendance_command))
+    app.add_handler(CommandHandler("viewattendance", attendance_command)) # Alias
     app.add_handler(CommandHandler("topic", register_topic_command))  # New topic command
     app.add_handler(CommandHandler("verifytopics", verify_topics_command))  # Verify topics
     app.add_handler(CallbackQueryHandler(verify_topics_callback, pattern="^verify_topics$"))
