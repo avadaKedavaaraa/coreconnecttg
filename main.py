@@ -465,6 +465,23 @@ def sanitize_html(text):
         text = text.replace(old, new)
     return text
 
+def safe_job_data(job):
+    """Safely get job data ensuring it returns a dict"""
+    if job and hasattr(job, 'data') and job.data:
+        return job.data
+    return {}
+
+def safe_decode(text):
+    """Safely decode text removing surrogate pairs that crash strings"""
+    if not text: return "No content"
+    try:
+        # First ensure it's a string
+        text = str(text)
+        # Encode to utf-8 replacing errors, then decode back
+        return text.encode('utf-8', 'replace').decode('utf-8')
+    except Exception:
+        return "Content Error"
+
 async def send_long_message(bot, chat_id, text, parse_mode=None, reply_markup=None, **kwargs):
     """
     Split and send long messages in chunks of 4000 characters.
@@ -1667,7 +1684,11 @@ async def start_edit(update, context):
     jobs = context.job_queue.jobs()
     
     # Filter valid class jobs
-    class_jobs = [j for j in jobs if j.name and isinstance(j.data, dict) and 'batch' in j.data and len(f"edit_{j.name}") <= 64]
+    class_jobs = []
+    for j in jobs:
+        d = safe_job_data(j)
+        if j.name and d and 'batch' in d and len(f"edit_{j.name}") <= 64:
+            class_jobs.append(j)
     
     if not class_jobs:
         await update.message.reply_text(
@@ -1691,12 +1712,12 @@ async def start_edit(update, context):
     
     rows = []
     for job in page_jobs:
-        d = job.data
+        d = safe_job_data(job)
         try:
             time_str = job.next_t.strftime("%d %b %H:%M")
         except:
             time_str = d.get('time_display', '')
-        rows.append([InlineKeyboardButton(f"📖 {d['batch']} {d['subject'][:15]} ({time_str})", callback_data=f"edit_{job.name}")])
+        rows.append([InlineKeyboardButton(f"📖 {d.get('batch','?')} {d.get('subject','?')[:15]} ({time_str})", callback_data=f"edit_{job.name}")])
     
     # Add navigation buttons if needed
     nav_row = []
@@ -1731,7 +1752,11 @@ async def edit_select_job(update, context):
         
         # Rebuild the class list for new page
         jobs = context.job_queue.jobs()
-        class_jobs = [j for j in jobs if j.name and isinstance(j.data, dict) and 'batch' in j.data and len(f"edit_{j.name}") <= 64]
+        class_jobs = []
+        for j in jobs:
+            d = safe_job_data(j)
+            if j.name and d and 'batch' in d and len(f"edit_{j.name}") <= 64:
+                class_jobs.append(j)
         class_jobs.sort(key=lambda j: j.next_t)
         
         PAGE_SIZE = 8
@@ -1744,12 +1769,12 @@ async def edit_select_job(update, context):
         
         rows = []
         for job in page_jobs:
-            d = job.data
+            d = safe_job_data(job)
             try:
                 time_str = job.next_t.strftime("%d %b %H:%M")
             except:
                 time_str = d.get('time_display', '')
-            rows.append([InlineKeyboardButton(f"📖 {d['batch']} {d['subject'][:15]} ({time_str})", callback_data=f"edit_{job.name}")])
+            rows.append([InlineKeyboardButton(f"📖 {d.get('batch','?')} {d.get('subject','?')[:15]} ({time_str})", callback_data=f"edit_{job.name}")])
         
         nav_row = []
         if page > 0:
@@ -1774,7 +1799,7 @@ async def edit_select_job(update, context):
     context.user_data['edit_page'] = 0  # Reset page for next time
     jobs = context.job_queue.get_jobs_by_name(context.user_data['edit_job_name'])
     if not jobs: return ConversationHandler.END
-    job_data = jobs[0].data or {}
+    job_data = safe_job_data(jobs[0])
     context.user_data['old_job_data'] = job_data
     context.user_data['old_next_t'] = jobs[0].next_t
     
@@ -3393,17 +3418,17 @@ async def viewfeedback_handler(update, context):
         if isinstance(entry, dict):
             # New format with user details
             timestamp = entry.get("timestamp", "Unknown time")
-            message = html.escape(str(entry.get("message", "No message")))
-            username = html.escape(str(entry.get("username", "no_username")))
-            name = html.escape(str(entry.get("name", "Unknown")))
+            message = safe_decode(entry.get("message", "No message"))
+            username = safe_decode(entry.get("username", "no_username"))
+            name = safe_decode(entry.get("name", "Unknown"))
             user_id = entry.get("user_id", "N/A")
-            chat_type = html.escape(str(entry.get("chat_type", "Unknown")))
+            chat_type = safe_decode(entry.get("chat_type", "Unknown"))
             
             msg += f"<b>{i}.</b> 📅 {timestamp}\n"
-            msg += f"   👤 <b>{name}</b> (@{username})\n"
+            msg += f"   👤 <b>{html.escape(name)}</b> (@{html.escape(username)})\n"
             msg += f"   🆔 <code>{user_id}</code>\n"
-            msg += f"   📍 {chat_type}\n"
-            msg += f"   📝 <i>{message[:100]}{'...' if len(message) > 100 else ''}</i>\n\n"
+            msg += f"   📍 {html.escape(chat_type)}\n"
+            msg += f"   📝 <i>{html.escape(message[:100])}{'...' if len(message) > 100 else ''}</i>\n\n"
         else:
             # Old string format (legacy)
             escaped_entry = html.escape(str(entry)[:150])
