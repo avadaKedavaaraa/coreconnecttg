@@ -3670,36 +3670,7 @@ async def delete_scope_handler(update, context):
     context.user_data['delete_page'] = 0
     
     await show_delete_page(query, context, valid_jobs, edit=True)
-            count += 1
-        
-        context.user_data['delete_jobs'] = []
-        await query.edit_message_text(
-            f"✅ <b>DELETED {count} CLASSES!</b>\n\n"
-            "<i>All scheduled classes have been removed.</i>",
-            parse_mode=ParseMode.HTML
-        )
-        return
-    
-    # Handle single class deletion
-    qid = data.replace("kill_", "")
-    jobs = context.job_queue.get_jobs_by_name(qid)
-    for j in jobs:
-        j.schedule_removal()
-    remove_job_from_db(qid)
-    
-    # Update the job list and show next page
-    if 'delete_jobs' in context.user_data:
-        context.user_data['delete_jobs'] = [n for n in context.user_data['delete_jobs'] if n != qid]
-    
-    remaining = len(context.user_data.get('delete_jobs', []))
-    if remaining > 0:
-        await show_delete_page(query, context, edit=True)
-    else:
-        await query.edit_message_text(
-            "✅ <b>ALL CLASSES DELETED!</b>\n\n"
-            "<i>No more scheduled classes.</i>",
-            parse_mode=ParseMode.HTML
-        )
+
 
 async def handle_expired(update, context):
     await update.callback_query.answer("⚠️ Expired.", show_alert=True)
