@@ -3359,6 +3359,36 @@ async def process_gemini_prompt(update, context):
 # ==============================================================================
 # 📩 14. UTILS
 # ==============================================================================
+async def cancelled_command(update, context):
+    """Handle class cancellation announcement"""
+    try:
+        user = update.effective_user
+        # Require Admin or specific permission? Assuming admin.
+        if not is_admin(user.username): return
+        
+        # Delete the trigger message
+        try:
+            await update.message.delete()
+        except: pass
+        
+        # Send announcement
+        msg = (
+            "🚫 <b>CLASS CANCELLED</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "<i>The scheduled class has been cancelled.</i>\n"
+            "<i>Please ignore previous notifications.</i>"
+        )
+        
+        # Reply to the same topic
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=msg,
+            parse_mode=ParseMode.HTML,
+            message_thread_id=update.message.message_thread_id
+        )
+    except Exception as e:
+        logger.error(f"Cancellation error: {e}")
+
 async def feedback_handler(update, context):
     user = update.effective_user
     chat_type = update.effective_chat.type
@@ -4244,7 +4274,7 @@ def main():
     app.add_handler(MessageHandler(filters.Regex("^🔙 Back"), handle_navigation))
     app.add_handler(MessageHandler(filters.Regex("^📤 Export"), export_data))
     app.add_handler(MessageHandler(filters.Regex("^📥 Import"), import_request))
-    app.add_handler(MessageHandler(filters.Document.MimeType("application/json"), handle_import_file))
+    app.add_handler(MessageHandler(filters.Document.MimeType("application/json") & filters.ChatType.PRIVATE, handle_import_file))
     app.add_handler(MessageHandler(filters.Regex("^🗑️ Delete Class"), delete_menu))
     app.add_handler(CallbackQueryHandler(handle_kill, pattern="^(kill_|del_page_)"))
     app.add_handler(CallbackQueryHandler(delete_scope_handler, pattern="^del_scope_"))
@@ -4254,9 +4284,11 @@ def main():
     app.add_handler(MessageHandler(filters.Regex("^🛠️ Admin Tools"), admin_command))
     app.add_handler(MessageHandler(filters.Regex("^☁️ Force Save"), force_cloud_save))
 
+    app.add_handler(CommandHandler("cancelled", cancelled_command))
+    app.add_handler(MessageHandler(filters.Regex("^☁️ Force Save"), force_cloud_save))
     app.add_handler(MessageHandler(filters.Regex("^📸 AI Auto-Schedule"), prompt_image_upload)) 
     app.add_handler(MessageHandler(filters.Regex("^📊 Attendance"), view_attendance_stats)) 
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, handle_photo))
     app.add_handler(MessageHandler(filters.Regex("^📅 View Schedule"), view_schedule_handler))
     app.add_handler(CallbackQueryHandler(view_schedule_handler, pattern="^schedule_page_"))
     app.add_handler(CallbackQueryHandler(mark_attendance, pattern="^att_"))
